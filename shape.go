@@ -16,13 +16,24 @@ import (
 const staleCodeMarker = "[earlier run() omitted — its result is in the message below; its data is in args]"
 
 // elideStaleCode returns a copy of history with every assistant message
-// except the most recent replaced by a one-line marker. A past run()'s
-// effect is fully captured by the threaded `args` and the logs, so the
-// only block worth keeping verbatim is the latest one (which the model
-// may need to repair on an error-retry). This removes the triangular
-// re-send of stale code that otherwise dominates prompt growth.
-// Non-assistant messages pass through untouched.
-func elideStaleCode(history []llm.Message) []llm.Message {
+// at index >= fromIndex, except the most recent one overall, replaced by
+// a one-line marker. A past run()'s effect is fully captured by the
+// threaded `args` and the logs, so the only block worth keeping verbatim
+// is the latest one (which the model may need to repair on an
+// error-retry). This removes the triangular re-send of stale code that
+// otherwise dominates prompt growth. Non-assistant messages pass through
+// untouched.
+//
+// fromIndex marks where THIS run's own history additions begin (its
+// run() blocks + execution-result turns) — everything before it is
+// real prior-conversation content, most importantly an earlier run's
+// actual final answer. Eliding indiscriminately across the whole
+// history would, once this run appends its own assistant turn,
+// overwrite that prior final answer with the stale-code marker even
+// though it was never a code block — corrupting the model's memory of
+// what it already told the user. Passing len(history) before this run
+// appends anything (as Run does) makes elision a same-run-only concern.
+func elideStaleCode(history []llm.Message, fromIndex int) []llm.Message {
 	lastAssistant := -1
 	for i, m := range history {
 		if m.Role == "assistant" {
@@ -35,7 +46,7 @@ func elideStaleCode(history []llm.Message) []llm.Message {
 	out := make([]llm.Message, len(history))
 	copy(out, history)
 	for i, m := range out {
-		if m.Role == "assistant" && i != lastAssistant {
+		if m.Role == "assistant" && i >= fromIndex && i != lastAssistant {
 			out[i] = llm.Message{Role: "assistant", Content: staleCodeMarker}
 		}
 	}

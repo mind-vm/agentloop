@@ -367,6 +367,68 @@ func TestRun_JSExecError_FedBackAndContinues(t *testing.T) {
 	}
 }
 
+// ---- branch: empty LLM completions are retried, then a typed error ----
+
+func TestRun_EmptyResponse_RetriesThenSucceeds(t *testing.T) {
+	sessions := newMemorySessions()
+	sessions.put("s1", agentloop.Session{ID: "s1"})
+	steps := newMemorySteps()
+
+	loop := agentloop.New(agentloop.Config{
+		LLM: newFakeLLM("fake",
+			llm.CompletionResponse{Content: "  \n  "}, // whitespace-only counts as empty
+			llm.CompletionResponse{Content: ""},
+			llm.CompletionResponse{Content: "DONE\nfinally"},
+		),
+		Sessions:       sessions,
+		Steps:          steps,
+		SandboxBuilder: emptyBuilder{},
+	})
+
+	var events []agentloop.RunEvent
+	result, err := loop.Run(context.Background(), agentloop.RunRequest{
+		SessionID: "s1", Message: "hi",
+		OnEvent: func(e agentloop.RunEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("run should recover from transient empty completions: %v", err)
+	}
+	if result.Status != "completed" || result.FinalText != "finally" {
+		t.Fatalf("status=%q final=%q", result.Status, result.FinalText)
+	}
+	if !eventWithContent(events, "warning", "empty model turn") {
+		t.Errorf("expected a warning event for each retried empty turn")
+	}
+}
+
+func TestRun_EmptyResponse_ExhaustsRetriesThenErrors(t *testing.T) {
+	sessions := newMemorySessions()
+	sessions.put("s1", agentloop.Session{ID: "s1"})
+	steps := newMemorySteps()
+
+	loop := agentloop.New(agentloop.Config{
+		LLM: newFakeLLM("fake",
+			llm.CompletionResponse{Content: ""},
+			llm.CompletionResponse{Content: ""},
+			llm.CompletionResponse{Content: ""},
+		),
+		Sessions:       sessions,
+		Steps:          steps,
+		SandboxBuilder: emptyBuilder{},
+	})
+
+	result, err := loop.Run(context.Background(), agentloop.RunRequest{SessionID: "s1", Message: "hi"})
+	if !errors.Is(err, agentloop.ErrEmptyResponse) {
+		t.Fatalf("expected ErrEmptyResponse, got %v", err)
+	}
+	if result.Status != "error" {
+		t.Fatalf("status: got %q, want %q", result.Status, "error")
+	}
+	if !contains(steps.types("s1"), "error") {
+		t.Errorf("expected a terminal error step, got: %v", steps.types("s1"))
+	}
+}
+
 // ---- branch: token aggregation sums across turns ----
 
 func TestRun_TokenAggregation_SumsAcrossTurns(t *testing.T) {

@@ -3,8 +3,10 @@ package agentloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -15,6 +17,20 @@ import (
 // MaxIterations is the default cap on LLM round-trips a single Run will
 // make (override via Config.MaxIterations).
 const MaxIterations = 20
+
+// maxEmptyRetries bounds how many times a turn that produced NO content
+// at all (e.g. a provider returning a 0-token completion on a large
+// prompt) is re-issued before the run gives up with ErrEmptyResponse.
+// Such empties are usually transient; retrying is cheap and self-heals
+// them. Counted against the same Run's MaxIterations budget — no
+// separate cap to configure.
+const maxEmptyRetries = 2
+
+// ErrEmptyResponse is returned when the model yields no content across
+// the allowed retries. Distinct from a normal completion so callers can
+// treat it as a retryable failure instead of silently finishing with an
+// empty answer.
+var ErrEmptyResponse = errors.New("agentloop: model returned an empty response")
 
 // RunTimeout is the default wall-clock cap on a single Run call
 // (override via Config.RunTimeout).
@@ -210,11 +226,17 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 
 	history := rehydrateHistory(priorSteps, l.cfg.HistoryWindow)
 	history = append(history, llm.Message{Role: "user", Content: req.Message})
+	// baseLen marks the end of the prior conversation, before this Run
+	// appends anything of its own — elideStaleCode uses it so eliding
+	// stale run() bodies never touches an earlier run's real final
+	// answer (see shape.go).
+	baseLen := len(history)
 
 	// prevArgs carries the previous turn's return value into the next as
 	// `args`. Held in-process across iterations of this Run; full
 	// fidelity, never serialised into the prompt.
 	prevArgs := json.RawMessage("{}")
+	emptyRetries := 0
 
 	for iter := 0; iter < l.cfg.MaxIterations; iter++ {
 		if ctx.Err() != nil {
@@ -228,7 +250,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		// (state) and the logs (observations), so re-sending the verbatim
 		// source every turn is pure triangular accumulation. Keep only
 		// the most recent block (for error-retry continuity) plus all logs.
-		messages := append([]llm.Message{{Role: "system", Content: sysPrompt}}, elideStaleCode(history)...)
+		messages := append([]llm.Message{{Role: "system", Content: sysPrompt}}, elideStaleCode(history, baseLen)...)
 		// The shape of the args this turn's run() will receive is
 		// injected EPHEMERALLY — built fresh each call, never stored in
 		// history — so the digest appears exactly once.
@@ -261,6 +283,27 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		usage.lastCompletion.Store(int32(resp.OutputTokens))
 
 		replyText := resp.Content
+
+		// An empty completion (e.g. a reasoning model returning a 0-token
+		// reply on a large prompt) is usually transient. Don't mislabel it
+		// as a completed answer via the no-fence fallback below — retry a
+		// bounded number of times, then surface a real error. Tokens are
+		// still counted above: the call happened and (if billed) cost
+		// something even though it produced nothing.
+		if strings.TrimSpace(replyText) == "" {
+			if emptyRetries < maxEmptyRetries {
+				emptyRetries++
+				emit(req.OnEvent, RunEvent{Type: "warning", Content: "empty model turn, retrying"})
+				continue
+			}
+			writeStep(RunStep{
+				StepType: "error",
+				Content:  ErrEmptyResponse.Error(),
+				ToolArgs: json.RawMessage(`{}`),
+			})
+			emit(req.OnEvent, RunEvent{Type: "error", Content: ErrEmptyResponse.Error()})
+			return finalize("error"), ErrEmptyResponse
+		}
 
 		// Legacy terminator: a "DONE" marker = final answer. answer()
 		// (handled after JS execution below) is the documented way to
@@ -297,8 +340,17 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		if execErr != nil {
 			// A failing turn must NOT destroy the carry — preserve
 			// prevArgs so the model can fix its code and retry with the
-			// state it already built.
-			resultContent = "Error: " + execErr.Error() + "\n(args from the previous turn are preserved — fix and retry.)"
+			// state it already built. The error is sanitized (goja's
+			// internal stack noise stripped) and, where a common failure
+			// pattern is recognised, given a concrete retry hint — both
+			// aimed at breaking the "model repeats the same mistake"
+			// attractor rather than reasoning from a raw Go error string.
+			clean := sanitizeErrorForModel(execErr.Error())
+			resultContent = "Error: " + clean
+			if hint := retryHintForError(clean); hint != "" {
+				resultContent += "\n\nRETRY HINT: " + hint
+			}
+			resultContent += "\n(args from the previous turn are preserved — fix and retry.)"
 		} else {
 			prevArgs = ret // thread full-fidelity return into next turn's args
 			persistBlob = ret
