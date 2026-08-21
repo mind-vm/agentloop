@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/jryannel/agentloop"
+	"github.com/jryannel/agentloop/agentloopmem"
 	"github.com/jryannel/agentloop/llm"
 )
 
@@ -37,8 +38,8 @@ func main() {
 	caps := agentloop.DefaultCapabilities(client, "")
 	l := agentloop.New(agentloop.Config{
 		LLM:            client,
-		Sessions:       newMemSessionStore(),
-		Steps:          newMemStepStore(),
+		Sessions:       agentloopmem.NewSessionStore(nil),
+		Steps:          agentloopmem.NewStepStore(),
 		SandboxBuilder: &agentloop.DefaultSandboxBuilder{Capabilities: caps},
 	})
 

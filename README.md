@@ -28,6 +28,14 @@ is kept verbatim) and large data never appears in the context window twice.
   [EdenAI](https://edenai.co), Groq, together.ai, a local vLLM/Ollama
   server, or any other gateway that speaks the same `/chat/completions`
   protocol.
+- **`agentloopmem`** — in-memory `SessionStore` / `StepStore` for local
+  dev, one-shot CLIs, and eval suites. Not for production traffic (no
+  durability, no cross-process visibility).
+- **`agentlooptest`** — `StepStoreContract`, a reusable conformance test
+  harness. Point it at your own `StepStore` implementation (Postgres,
+  SQLite, whatever) to hold it to the same behavioural guarantees the
+  loop relies on — see `agentloopmem`'s own `contract_test.go` for the
+  worked example.
 
 ## Quickstart
 
@@ -85,11 +93,42 @@ export OPENAI_CHAT_MODEL=google/gemini-2.5-flash
   scope or session, e.g. pulled from a database per tenant.
 - **Custom stores** — `SessionStore` and `StepStore` are small
   interfaces; back them with whatever persistence you already have.
-  `examples/cli` ships trivial in-memory implementations to start from.
+  `agentloopmem` ships in-memory implementations to start from, and
+  `agentlooptest.StepStoreContract` is a conformance harness to run
+  against your own implementation as an acceptance gate.
 - **Policy** — implement `sandbox.PolicyChecker` to gate side-effecting
   primitives (`fetch`, `ai`, or your own) per call. `sandbox.DefaultPolicy`
   is a conservative default (deny side effects, block private-network
   fetches); `sandbox.AllowAll` is the explicit fail-open escape hatch.
+
+A capability whose `Build` fails is logged and skipped (a `warning`
+sandbox event, not an aborted session) — one flaky capability shouldn't
+deny the user their turn.
+
+## Known limitations
+
+This is a synchronous, single-process design, not a durable workflow
+engine:
+
+- **No durable execution.** A `Run` call lives in one goroutine; a
+  process restart mid-run kills it (steps already persisted are fine,
+  but nothing resumes automatically).
+- **Everything inside a turn is synchronous**, including I/O — no
+  `Promise`/`async`/`.then()` in the sandbox (goja parses them but has
+  no event loop, so continuations silently never run; the system prompt
+  warns the model off this).
+- **Process-level isolation only.** goja is memory-safe and
+  interruptible, but sandboxes share the host process's heap/CPU — no
+  per-run resource quota.
+- **Unbounded args carry.** Nothing caps the size of the server-side
+  state threaded between turns (`RunResult.DataBytesCarried` gives you
+  the observability to notice, not a limit).
+- **No built-in cost ceiling.** `MaxIterations` bounds turns and token
+  usage is tracked, but there's no per-run or per-tenant token budget.
+
+None of these are architectural dead ends — they're the natural next
+layer (suspend/resume, batched I/O primitives, resource quotas, budget
+enforcement) to add on top if/when you need them.
 
 ## License
 

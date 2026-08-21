@@ -2,7 +2,7 @@ package agentloop
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 
 	"github.com/jryannel/agentloop/llm"
 	"github.com/jryannel/agentloop/sandbox"
@@ -77,7 +77,10 @@ type DefaultSandboxBuilder struct {
 	EnabledCapabilities *[]string
 }
 
-// Build implements SandboxBuilder.
+// Build implements SandboxBuilder. A capability whose Build fails is
+// logged and skipped — via a "warning" sandbox.Event when onEvent is
+// non-nil, and always via slog — rather than aborting the whole
+// session: one flaky capability shouldn't deny the user their turn.
 func (b *DefaultSandboxBuilder) Build(ctx context.Context, sess Session, scope Scope, onEvent sandbox.OnEvent) (*sandbox.Sandbox, func(), error) {
 	bc := BuildContext{
 		Ctx:                 ctx,
@@ -94,7 +97,11 @@ func (b *DefaultSandboxBuilder) Build(ctx context.Context, sess Session, scope S
 		}
 		built, err := cap.Build(bc)
 		if err != nil {
-			return nil, nil, fmt.Errorf("agentloop: building capability %q: %w", cap.Name, err)
+			slog.WarnContext(ctx, "agentloop: capability build failed", "name", cap.Name, "error", err)
+			if onEvent != nil {
+				onEvent(sandbox.Event{Kind: sandbox.EventWarning, Summary: "capability unavailable this run: " + cap.Name, Detail: err.Error()})
+			}
+			continue
 		}
 		packs = append(packs, built...)
 	}
