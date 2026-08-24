@@ -1,13 +1,13 @@
 ---
 title: Extending agentloop
-description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, session-scoped sandbox reuse, and distributed tracing — the seams agentloop is designed to be extended through.
+description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, OpenAPI-generated skills, session-scoped sandbox reuse, and distributed tracing — the seams agentloop is designed to be extended through.
 sidebar:
   order: 1
 ---
 
 agentloop ships a minimal default (`DefaultCapabilities`,
 `DefaultSandboxBuilder`, `agentloopmem`'s in-memory stores,
-`sandbox.DefaultPolicy`) that's enough to run the quickstart, and seven seams
+`sandbox.DefaultPolicy`) that's enough to run the quickstart, and eight seams
 meant to be replaced for a real application.
 
 ## Custom capabilities
@@ -121,6 +121,74 @@ sandbox.DefaultPolicy{AllowTools: []string{"sendEmail", "secret"}}
 `documentSearch` and `stores` are read-only against an application-scoped
 backend and aren't policy-gated by default — gate them yourself in a
 custom `PolicyChecker` if that scoping isn't enough.
+
+## Generating a skill from an OpenAPI spec
+
+`ext.OpenAPIPack(spec, cfg)` turns an OpenAPI 3 document into a
+`require()`-able skill — one JS function per operation:
+
+```go
+spec, err := openapi3.NewLoader().LoadFromFile("petstore.yaml")
+pack, err := ext.OpenAPIPack(spec, ext.OpenAPIConfig{
+    Headers: map[string]string{"Authorization": "Bearer " + apiKey},
+})
+caps = append(caps, agentloop.Capability{
+    Name: pack.Name,
+    Build: func(agentloop.BuildContext) ([]sandbox.Pack, error) {
+        return []sandbox.Pack{pack}, nil
+    },
+})
+```
+
+Each generated function takes a single `params` object —
+`params.<name>` for every path/query parameter, `params.body` for the
+request body — rather than positional arguments, since operations vary
+too much in parameter count for a positional signature to stay
+readable. It returns `{status, body, headers}`: the same shape
+`fetch()`/`require('http')` already return, body included as a raw
+string (`JSON.parse` it yourself if the response is JSON).
+
+**No new HTTP client.** Generated functions call the sandbox's own
+internal `_http` primitive — the same one `require('http')` wraps —
+not a client `OpenAPIPack` brings itself. That means every call a
+generated function makes is policy-gated exactly like `fetch()` already
+is (URL allowlist, private-network denial, all of it), and
+`require(<skill name>)` is gated by that name like any other skill.
+`_http` is used directly instead of going through `require('http')`
+because it uniformly supports every HTTP method via one `method`
+option, including `PATCH` — which the `http` module's fixed
+`get`/`post`/`put`/`del` set has no wrapper for.
+
+**`cfg.Headers` is the whole auth story** — a static header map (bearer
+token, API key) applied to every request this skill's functions make.
+OpenAPI `securitySchemes` are not interpreted; there's no OAuth flow, no
+per-call credential resolution. This covers the common case (one API
+key or token for the whole skill) and nothing beyond it.
+
+**The skill stays out of the system prompt.** Following the
+lazy-loading pattern `sandbox.SkillDiscoveryPack` already uses (see
+[Packages](/agentloop/concepts/packages/)), the generated `Pack`'s
+system-prompt contribution is empty — a spec can have far more
+operations than are worth inlining into every turn. The model
+discovers the skill via `skillList()` (name + one-line description) and
+pulls the full per-operation documentation via `skillGet(<skill name>)`
+only when it decides to use it.
+
+A few things worth knowing before pointing this at a real spec:
+
+- **Base URL** comes from `cfg.BaseURL`, or the spec's first `servers`
+  entry if unset. `OpenAPIPack` errors if neither is present — a skill
+  with nowhere to send requests is a config mistake, not something to
+  silently install.
+- **Required-ness is documented, not enforced.** A required path or
+  query parameter left out of `params` isn't caught client-side; the
+  request goes out and the server rejects it (or doesn't).
+- **Function names come from `operationId`** (sanitized into a valid JS
+  identifier) when the operation has one, otherwise derived from the
+  method and path — `GET /pets/{petId}/photos` becomes
+  `getPetsByPetIdPhotos`. Two operations that collide on the same
+  derived name get a numeric suffix (`getPets`, `getPets2`, ...) rather
+  than one silently overwriting the other.
 
 ## Session-scoped sandbox reuse
 

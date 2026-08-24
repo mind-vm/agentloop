@@ -61,9 +61,13 @@ the same behavioural guarantees the loop relies on.
 
 Optional `sandbox.Pack`s that are generically useful but don't belong in the
 core sandbox package: `EmailPack` (`sendEmail`), `SecretPack` (`secret`),
-`SearchPack` (`documentSearch`), `StoresPack` (`stores.list`/`stores.read`).
-Not part of `DefaultCapabilities` — wire in the ones you need. See
-[Extending → Optional extension packs](/agentloop/extending/#optional-extension-packs).
+`SearchPack` (`documentSearch`), `StoresPack` (`stores.list`/`stores.read`),
+and `OpenAPIPack`, which generates a whole `require()`-able skill — one JS
+function per operation — from an OpenAPI 3 document. Not part of
+`DefaultCapabilities` — wire in the ones you need. See [Extending → Optional
+extension packs](/agentloop/extending/#optional-extension-packs) and
+[Extending → Generating a skill from an OpenAPI
+spec](/agentloop/extending/#generating-a-skill-from-an-openapi-spec).
 
 ## `pool`
 

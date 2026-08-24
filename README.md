@@ -39,9 +39,12 @@ is kept verbatim) and large data never appears in the context window twice.
 - **`ext`** — optional `sandbox.Pack`s that are generically useful but
   don't belong in the core sandbox package: `EmailPack` (`sendEmail`),
   `SecretPack` (`secret`), `SearchPack` (`documentSearch`), `StoresPack`
-  (`stores.list`/`stores.read`). Each takes a callback or small
-  interface, same as the core packs, so this package stays free of any
-  mail/secrets/search-backend dependency.
+  (`stores.list`/`stores.read`), and `OpenAPIPack`, which generates a
+  `require()`-able skill — one JS function per operation — from an
+  OpenAPI 3 document. Each takes a callback, small interface, or (for
+  `OpenAPIPack`) a parsed spec, same decoupling the core packs use, so
+  this package stays free of any mail/secrets/search-backend/HTTP-client
+  dependency of its own.
 - **`pool`** — `SandboxPool`, a `SandboxBuilder` that reuses one
   long-lived sandbox per session across every `Run` instead of paying
   `goja.New()` + pack-registration cost on every message. Wraps any
@@ -118,6 +121,36 @@ export OPENAI_CHAT_MODEL=google/gemini-2.5-flash
   the slice passed to `DefaultSandboxBuilder`. `sendEmail` and `secret`
   are already in `DefaultPolicy`'s side-effect list, so they're denied
   until granted via `DefaultPolicy.AllowTools`.
+- **Generate a skill from an OpenAPI spec** — `ext.OpenAPIPack(spec, cfg)`
+  turns an OpenAPI 3 document into a `require()`-able skill: one JS
+  function per operation, named after its `operationId` (or derived from
+  the method + path when it has none), taking a single `params` object
+  (`params.<name>` per path/query parameter, `params.body` for the
+  request body) and returning `{status, body, headers}` — the same shape
+  `fetch()`/`require('http')` already return. Generated functions call
+  the sandbox's own internal HTTP primitive, not a new client, so every
+  call is still policy-gated exactly like `fetch()` already is, and
+  `require(<skill name>)` is gated by that name like any other skill.
+  `cfg.Headers` is the whole auth story (a static header map — bearer
+  token, API key — applied to every call); OpenAPI `securitySchemes`
+  aren't interpreted. Following the skill-laziness pattern the rest of
+  agentloop's skill mechanism uses, the generated Pack's system-prompt
+  contribution is empty — a spec can have far more operations than are
+  worth inlining into every turn — so the model discovers it via
+  `skillList()` and pulls the full per-operation docs via
+  `skillGet(<skill name>)` only when it needs them:
+
+  ```go
+  spec, err := openapi3.NewLoader().LoadFromFile("petstore.yaml")
+  pack, err := ext.OpenAPIPack(spec, ext.OpenAPIConfig{
+      Headers: map[string]string{"Authorization": "Bearer " + apiKey},
+  })
+  caps = append(caps, agentloop.Capability{
+      Name: pack.Name,
+      Build: func(agentloop.BuildContext) ([]sandbox.Pack, error) { return []sandbox.Pack{pack}, nil },
+  })
+  ```
+
 - **Session-scoped sandbox reuse** — `agentloop.New`'s default is a
   fresh sandbox per `Run` (`sandbox.New()` builds a whole `goja.Runtime`
   and re-registers every pack from scratch every time). Wrap your
