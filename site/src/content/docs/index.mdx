@@ -1,0 +1,126 @@
+---
+title: agentloop
+description: A small Go engine for LLM agents that think by writing JavaScript instead of calling named tools.
+template: splash
+hero:
+  tagline: >
+    A small Go engine for LLM agents that think by writing JavaScript instead
+    of calling named tools. The model's return value threads into the next
+    turn server-side, at full fidelity — never re-serialised into the prompt.
+  actions:
+    - text: Quickstart
+      link: /agentloop/start/
+      icon: right-arrow
+    - text: Read the concepts
+      link: /agentloop/concepts/
+      icon: open-book
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/jryannel/agentloop
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+## One turn, one script
+
+Each turn the model emits a single fenced ` ```javascript ` block defining
+`function run(args) { ... }`. agentloop executes it in a sandboxed
+[goja](https://github.com/dop251/goja) runtime and threads its return value
+into the *next* turn as `args` — a real JavaScript value, not text the model
+has to re-read and re-parse. The model sees only its own `log()` output plus
+a compact structural digest of what it returned. A run finishes when the
+script calls `answer(result)`.
+
+```go
+client, err := llm.NewOpenAI(llm.ConfigFromEnv())
+
+caps := agentloop.DefaultCapabilities(client, "")
+loop := agentloop.New(agentloop.Config{
+    LLM:            client,
+    Sessions:       mySessionStore,
+    Steps:          myStepStore,
+    SandboxBuilder: &agentloop.DefaultSandboxBuilder{Capabilities: caps},
+})
+
+result, err := loop.Run(ctx, agentloop.RunRequest{
+    SessionID: "session-1",
+    Message:   "What's 12 * 7? Reply with just the number.",
+})
+```
+
+That return-threading design keeps the prompt small even for many-step runs:
+stale code is elided from history — only the most recent turn's script is
+kept verbatim — and large data never appears in the context window twice.
+
+[Why JavaScript instead of tool calls →](/agentloop/concepts/)
+
+## Five packages, each independently useful
+
+<CardGrid>
+  <Card title="agentloop" icon="seti:go">
+    The reasoning loop itself: `Loop.Run` drives the rehydrate → prompt →
+    execute → thread cycle for one user message.
+  </Card>
+  <Card title="sandbox" icon="seti:javascript">
+    The goja-based JS executor and its built-in packs — `require`, `http`,
+    `fetch`, `markdown`, `ai`/`aiJSON`, `help`, skill discovery — gated by a
+    `PolicyChecker` seam.
+  </Card>
+  <Card title="llm" icon="rocket">
+    A small `Client` interface plus an OpenAI-wire-compatible implementation
+    that works with OpenAI, OpenRouter, EdenAI, Groq, together.ai, or a local
+    vLLM/Ollama server.
+  </Card>
+  <Card title="agentloopmem" icon="seti:db">
+    In-memory `SessionStore` / `StepStore` for local dev, one-shot CLIs, and
+    eval suites. Not for production traffic — no durability, no cross-process
+    visibility.
+  </Card>
+  <Card title="agentlooptest" icon="approve-check">
+    `StepStoreContract`, a reusable conformance harness — point it at your own
+    `StepStore` implementation to hold it to the guarantees the loop relies
+    on.
+  </Card>
+</CardGrid>
+
+[Package details →](/agentloop/concepts/packages/)
+
+## Built to be extended, not configured
+
+<CardGrid>
+  <Card title="Capabilities are closures" icon="puzzle">
+    A `Capability` is a name plus a `Build` func returning sandbox packs.
+    Application-specific dependencies — a database handle, an accumulator —
+    are closed over when the capability is constructed, not threaded through
+    a generic context bag.
+  </Card>
+  <Card title="Your own sandbox composition" icon="seti:config">
+    Implement `SandboxBuilder` yourself when the capability set varies per
+    scope or session, e.g. a per-tenant allowlist pulled from a database.
+  </Card>
+  <Card title="Bring your own store" icon="seti:db">
+    `SessionStore` and `StepStore` are small interfaces. Back them with
+    whatever persistence you already have, and run
+    `agentlooptest.StepStoreContract` against it as an acceptance gate.
+  </Card>
+  <Card title="Policy gates side effects" icon="approve-check">
+    `sandbox.PolicyChecker` gates `fetch`, `ai`, or your own primitives per
+    call. `DefaultPolicy` denies side effects and blocks private-network
+    fetches; `AllowAll` is the explicit fail-open escape hatch.
+  </Card>
+</CardGrid>
+
+[Extending agentloop →](/agentloop/extending/)
+
+## Status
+
+This is a synchronous, single-process design, not a durable workflow engine —
+see [known limitations](/agentloop/reference/#known-limitations) for what that
+means in practice (no durable execution, no async in the sandbox, no built-in
+cost ceiling). None of those are architectural dead ends; they're the natural
+next layer to add on top if and when you need them.
+
+Licensed proprietary, all rights reserved — see
+[LICENSE](https://github.com/jryannel/agentloop/blob/main/LICENSE).
