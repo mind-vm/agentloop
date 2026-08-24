@@ -1,13 +1,13 @@
 ---
 title: Extending agentloop
-description: Custom capabilities, sandbox composition, stores, policy, and optional extension packs — the seams agentloop is designed to be extended through.
+description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, and session-scoped sandbox reuse — the seams agentloop is designed to be extended through.
 sidebar:
   order: 1
 ---
 
 agentloop ships a minimal default (`DefaultCapabilities`,
 `DefaultSandboxBuilder`, `agentloopmem`'s in-memory stores,
-`sandbox.DefaultPolicy`) that's enough to run the quickstart, and five seams
+`sandbox.DefaultPolicy`) that's enough to run the quickstart, and six seams
 meant to be replaced for a real application.
 
 ## Custom capabilities
@@ -121,6 +121,50 @@ sandbox.DefaultPolicy{AllowTools: []string{"sendEmail", "secret"}}
 `documentSearch` and `stores` are read-only against an application-scoped
 backend and aren't policy-gated by default — gate them yourself in a
 custom `PolicyChecker` if that scoping isn't enough.
+
+## Session-scoped sandbox reuse
+
+`sandbox.New()` builds a whole `goja.Runtime` and re-registers every pack
+from scratch — for some packs (the `http`/`secret` `require()` module
+wrappers, say) that includes compiling JS source. `DefaultSandboxBuilder`
+pays that cost on **every** `Run`, i.e. every message. `pool.SandboxPool`
+wraps any other `SandboxBuilder` and instead reuses one sandbox per session
+across every `Run`:
+
+```go
+builder := pool.New(&agentloop.DefaultSandboxBuilder{Capabilities: caps}, pool.Options{
+    IdleTimeout: 30 * time.Minute,
+})
+defer builder.Close()
+
+loop := agentloop.New(agentloop.Config{
+    // ...
+    SandboxBuilder: builder,
+})
+```
+
+This isn't just a cache wrapper, because of two things a fresh-per-Run
+builder never had to worry about:
+
+- **Stale context.** A `Capability`'s `Build` closes over `BuildContext.Ctx`
+  *once* — `DefaultCapabilities`' `ai` capability and every `ext` pack do
+  this. A naively cached sandbox would keep using the *first* Run's
+  context — including its cancellation — on every later Run. `SandboxPool`
+  gives the delegate builder a swappable context in place of the real one,
+  and swaps in each Run's actual context before handing the sandbox back.
+- **Concurrent use.** `goja.Runtime` isn't safe for concurrent access from
+  multiple goroutines. Two fresh sandboxes never collided on this; one
+  shared sandbox can. `SandboxPool` serializes: a second `Run` for a
+  session already in flight blocks until the first releases the sandbox
+  (via the `cleanup` func `Loop.Run` already defers), rather than racing on
+  it. For a typical chat session — no second message before the first one's
+  response — this is invisible; an application that intentionally runs
+  concurrent `Run`s for one session will see them serialize instead of
+  parallelize.
+
+`pool.SandboxPool` also exposes `Evict(sessionID)` for an application-level
+session end (logout), and `EvictIdle()` to drive eviction on your own
+schedule instead of (or in addition to) the built-in background reaper.
 
 ## Next
 

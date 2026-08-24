@@ -56,14 +56,14 @@ kept verbatim — and large data never appears in the context window twice.
 
 [Why JavaScript instead of tool calls →](/agentloop/concepts/)
 
-## Five packages, each independently useful
+## Six packages, each independently useful
 
 <CardGrid>
-  <Card title="agentloop" icon="seti:go">
+  <Card title="agentloop" icon="random">
     The reasoning loop itself: `Loop.Run` drives the rehydrate → prompt →
     execute → thread cycle for one user message.
   </Card>
-  <Card title="sandbox" icon="seti:javascript">
+  <Card title="sandbox" icon="node">
     The goja-based JS executor and its built-in packs — `require`, `http`,
     `fetch`, `markdown`, `ai`/`aiJSON`, `help`, skill discovery — gated by a
     `PolicyChecker` seam.
@@ -73,7 +73,7 @@ kept verbatim — and large data never appears in the context window twice.
     that works with OpenAI, OpenRouter, EdenAI, Groq, together.ai, or a local
     vLLM/Ollama server.
   </Card>
-  <Card title="agentloopmem" icon="seti:db">
+  <Card title="agentloopmem" icon="database">
     In-memory `SessionStore` / `StepStore` for local dev, one-shot CLIs, and
     eval suites. Not for production traffic — no durability, no cross-process
     visibility.
@@ -89,6 +89,12 @@ kept verbatim — and large data never appears in the context window twice.
     sandbox and out of `DefaultCapabilities` so nothing pulls them in
     unasked.
   </Card>
+  <Card title="pool" icon="padlock">
+    `SandboxPool` reuses one sandbox per session across every `Run` instead
+    of rebuilding one — and every pack's registration — on every message,
+    without leaking a stale context or racing two `Run`s on one
+    `goja.Runtime`.
+  </Card>
 </CardGrid>
 
 [Package details →](/agentloop/concepts/packages/)
@@ -102,11 +108,11 @@ kept verbatim — and large data never appears in the context window twice.
     are closed over when the capability is constructed, not threaded through
     a generic context bag.
   </Card>
-  <Card title="Your own sandbox composition" icon="seti:config">
+  <Card title="Your own sandbox composition" icon="setting">
     Implement `SandboxBuilder` yourself when the capability set varies per
     scope or session, e.g. a per-tenant allowlist pulled from a database.
   </Card>
-  <Card title="Bring your own store" icon="seti:db">
+  <Card title="Bring your own store" icon="database">
     `SessionStore` and `StepStore` are small interfaces. Back them with
     whatever persistence you already have, and run
     `agentlooptest.StepStoreContract` against it as an acceptance gate.

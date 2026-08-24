@@ -65,6 +65,15 @@ core sandbox package: `EmailPack` (`sendEmail`), `SecretPack` (`secret`),
 Not part of `DefaultCapabilities` — wire in the ones you need. See
 [Extending → Optional extension packs](/agentloop/extending/#optional-extension-packs).
 
+## `pool`
+
+`SandboxPool`, a `SandboxBuilder` decorator that reuses one sandbox per
+session across every `Run` instead of building a fresh one — a whole
+`goja.Runtime` plus every pack's registration — on every message. Wraps any
+other `SandboxBuilder`. See [Extending → Session-scoped sandbox
+reuse](/agentloop/extending/#session-scoped-sandbox-reuse) for the
+correctness problem it has to solve to do that safely.
+
 ## Next
 
 [Extending agentloop](/agentloop/extending/) covers the seams — capabilities,

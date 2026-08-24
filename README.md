@@ -42,6 +42,11 @@ is kept verbatim) and large data never appears in the context window twice.
   (`stores.list`/`stores.read`). Each takes a callback or small
   interface, same as the core packs, so this package stays free of any
   mail/secrets/search-backend dependency.
+- **`pool`** — `SandboxPool`, a `SandboxBuilder` that reuses one
+  long-lived sandbox per session across every `Run` instead of paying
+  `goja.New()` + pack-registration cost on every message. Wraps any
+  other `SandboxBuilder`; see [Extending](#extending) for the
+  correctness issue it has to solve to do that safely.
 
 ## Quickstart
 
@@ -113,6 +118,35 @@ export OPENAI_CHAT_MODEL=google/gemini-2.5-flash
   the slice passed to `DefaultSandboxBuilder`. `sendEmail` and `secret`
   are already in `DefaultPolicy`'s side-effect list, so they're denied
   until granted via `DefaultPolicy.AllowTools`.
+- **Session-scoped sandbox reuse** — `agentloop.New`'s default is a
+  fresh sandbox per `Run` (`sandbox.New()` builds a whole `goja.Runtime`
+  and re-registers every pack from scratch every time). Wrap your
+  `SandboxBuilder` in `pool.New` to reuse one sandbox per session across
+  every `Run` instead:
+
+  ```go
+  builder := pool.New(&agentloop.DefaultSandboxBuilder{Capabilities: caps}, pool.Options{
+      IdleTimeout: 30 * time.Minute, // evict a session's sandbox after this much idle time
+  })
+  defer builder.Close()
+
+  loop := agentloop.New(agentloop.Config{
+      // ...
+      SandboxBuilder: builder,
+  })
+  ```
+
+  This isn't just a cache wrapper — a `Capability`'s `Build` closes over
+  `BuildContext.Ctx` once (see `DefaultCapabilities` in `defaults.go`),
+  so a naively cached sandbox would keep using the *first* Run's
+  context — including its cancellation — forever. `pool.SandboxPool`
+  gives the delegate builder a swappable context instead, and swaps in
+  each Run's real context before handing the sandbox back. It also
+  serializes concurrent Runs for one session: a `goja.Runtime` isn't
+  safe for concurrent use, so a second Run for a session already in
+  flight blocks until the first releases the sandbox, rather than
+  racing on it. See the `pool` package doc comment for both mechanisms
+  in detail.
 
 A capability whose `Build` fails is logged and skipped (a `warning`
 sandbox event, not an aborted session) — one flaky capability shouldn't
