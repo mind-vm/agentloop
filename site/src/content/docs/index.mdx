@@ -83,6 +83,12 @@ kept verbatim — and large data never appears in the context window twice.
     `StepStore` implementation to hold it to the guarantees the loop relies
     on.
   </Card>
+  <Card title="ext" icon="puzzle">
+    Optional packs that are generically useful but not universal — email,
+    secrets, document search, a document store — kept out of the core
+    sandbox and out of `DefaultCapabilities` so nothing pulls them in
+    unasked.
+  </Card>
 </CardGrid>
 
 [Package details →](/agentloop/concepts/packages/)

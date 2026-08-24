@@ -36,6 +36,12 @@ is kept verbatim) and large data never appears in the context window twice.
   SQLite, whatever) to hold it to the same behavioural guarantees the
   loop relies on — see `agentloopmem`'s own `contract_test.go` for the
   worked example.
+- **`ext`** — optional `sandbox.Pack`s that are generically useful but
+  don't belong in the core sandbox package: `EmailPack` (`sendEmail`),
+  `SecretPack` (`secret`), `SearchPack` (`documentSearch`), `StoresPack`
+  (`stores.list`/`stores.read`). Each takes a callback or small
+  interface, same as the core packs, so this package stays free of any
+  mail/secrets/search-backend dependency.
 
 ## Quickstart
 
@@ -100,6 +106,13 @@ export OPENAI_CHAT_MODEL=google/gemini-2.5-flash
   primitives (`fetch`, `ai`, or your own) per call. `sandbox.DefaultPolicy`
   is a conservative default (deny side effects, block private-network
   fetches); `sandbox.AllowAll` is the explicit fail-open escape hatch.
+- **Optional extension packs** — `ext.EmailPack`, `ext.SecretPack`,
+  `ext.SearchPack`, and `ext.StoresPack` are common but not universal, so
+  they live outside `sandbox` and aren't in `DefaultCapabilities`. Wrap
+  one in a `Capability` that closes over your own backend and add it to
+  the slice passed to `DefaultSandboxBuilder`. `sendEmail` and `secret`
+  are already in `DefaultPolicy`'s side-effect list, so they're denied
+  until granted via `DefaultPolicy.AllowTools`.
 
 A capability whose `Build` fails is logged and skipped (a `warning`
 sandbox event, not an aborted session) — one flaky capability shouldn't

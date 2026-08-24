@@ -1,13 +1,13 @@
 ---
 title: Extending agentloop
-description: Custom capabilities, sandbox composition, stores, and policy — the seams agentloop is designed to be extended through.
+description: Custom capabilities, sandbox composition, stores, policy, and optional extension packs — the seams agentloop is designed to be extended through.
 sidebar:
   order: 1
 ---
 
 agentloop ships a minimal default (`DefaultCapabilities`,
 `DefaultSandboxBuilder`, `agentloopmem`'s in-memory stores,
-`sandbox.DefaultPolicy`) that's enough to run the quickstart, and four seams
+`sandbox.DefaultPolicy`) that's enough to run the quickstart, and five seams
 meant to be replaced for a real application.
 
 ## Custom capabilities
@@ -79,6 +79,48 @@ Implement `sandbox.PolicyChecker` to gate side-effecting primitives —
 - **`sandbox.AllowAll`** is the explicit fail-open escape hatch, for
   contexts (a trusted internal tool, a sandboxed eval harness) where that
   conservatism isn't wanted.
+
+## Optional extension packs
+
+The core `sandbox` package's built-in packs — `require`, `http`, `fetch`,
+`markdown`, `ai`, `help`, skills — are the minimal set every deployment
+needs. The `ext` package holds packs that are generically useful but not
+universal, so they stay out of `DefaultCapabilities` and out of `sandbox`
+itself:
+
+| Pack | Primitive | Backend seam |
+|---|---|---|
+| `ext.EmailPack` | `sendEmail({to, subject, body})` | `func(to, subject, body string) error` |
+| `ext.SecretPack` | `secret(name)` | `func(name string) (string, error)` |
+| `ext.SearchPack` | `documentSearch(query, topK?)` | `func(query string, topK int) ([]ext.SearchHit, error)` |
+| `ext.StoresPack` | `stores.list()` / `stores.read(id)` | `ext.StoresBackend` interface |
+
+Each takes a callback or small interface rather than a concrete dependency —
+the same decoupling `DefaultCapabilities`' `ai` capability uses for
+`llm.Client` — so `ext` stays free of any mail/secrets/search-backend
+import. Wire one in the same way as any custom capability:
+
+```go
+caps := agentloop.DefaultCapabilities(client, "")
+caps = append(caps, agentloop.Capability{
+    Name:        "sendEmail",
+    Description: "Send a plain-text email",
+    Build: func(bc agentloop.BuildContext) ([]sandbox.Pack, error) {
+        return []sandbox.Pack{ext.EmailPack(bc.Ctx, mySender.Send)}, nil
+    },
+})
+```
+
+`sendEmail` and `secret` are already in `sandbox.DefaultPolicy`'s
+side-effect list, so a bare `DefaultPolicy` denies both until granted:
+
+```go
+sandbox.DefaultPolicy{AllowTools: []string{"sendEmail", "secret"}}
+```
+
+`documentSearch` and `stores` are read-only against an application-scoped
+backend and aren't policy-gated by default — gate them yourself in a
+custom `PolicyChecker` if that scoping isn't enough.
 
 ## Next
 

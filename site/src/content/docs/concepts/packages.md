@@ -57,6 +57,14 @@ real implementation.
 own `StepStore` implementation (Postgres, SQLite, whatever) to hold it to
 the same behavioural guarantees the loop relies on.
 
+## `ext`
+
+Optional `sandbox.Pack`s that are generically useful but don't belong in the
+core sandbox package: `EmailPack` (`sendEmail`), `SecretPack` (`secret`),
+`SearchPack` (`documentSearch`), `StoresPack` (`stores.list`/`stores.read`).
+Not part of `DefaultCapabilities` — wire in the ones you need. See
+[Extending → Optional extension packs](/agentloop/extending/#optional-extension-packs).
+
 ## Next
 
 [Extending agentloop](/agentloop/extending/) covers the seams — capabilities,
