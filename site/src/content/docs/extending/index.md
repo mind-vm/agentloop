@@ -1,6 +1,6 @@
 ---
 title: Extending agentloop
-description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, OpenAPI-generated skills, session-scoped sandbox reuse, distributed tracing, and evaluating agent quality.
+description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, OpenAPI-generated skills, session-scoped sandbox reuse, distributed tracing, evaluating agent quality, and redacting secrets.
 sidebar:
   order: 1
 ---
@@ -9,7 +9,8 @@ agentloop ships a minimal default (`DefaultCapabilities`,
 `DefaultSandboxBuilder`, `agentloopmem`'s in-memory stores,
 `sandbox.DefaultPolicy`) that's enough to run the quickstart, and eight seams
 meant to be replaced for a real application — plus an eval harness for
-checking whether replacing them made things better or worse.
+checking whether replacing them made things better or worse, and a
+redaction seam for keeping secrets out of both.
 
 ## Custom capabilities
 
@@ -314,7 +315,7 @@ every response 0–10, and persists the run:
 
 ```go
 store := evalmem.New() // or your own eval.Store
-svc := eval.NewService(store, loop, judgeClient)
+svc := eval.NewService(store, loop, judgeClient, nil) // last arg: optional *redact.Redactor
 
 suite, _ := svc.CreateSuite(ctx, "arithmetic", "" /* judge model, empty = client default */)
 svc.AddCase(ctx, suite.ID, "sums", "What's 2+2?", "must say 4", 7, nil)
@@ -341,6 +342,43 @@ suite — `RunSuite` always finishes and returns a `Run`.
 
 `evalmem.InMemoryStore` implements `eval.Store` for local dev and CI; back
 a real deployment with whatever persistence you already have.
+
+## Redacting secrets from observability
+
+`redact.Redactor` holds a small ordered list of (secret value, placeholder)
+pairs and strips every occurrence out of text or bytes:
+
+```go
+redactor := redact.FromSecrets(map[string]string{
+    "api_key": theActualKeyValue,
+})
+```
+
+A nil `*Redactor` is a safe pass-through on every method, so this is
+entirely opt-in — nothing changes until you build one and hand it to one
+of the two places that take it:
+
+- **`Config.Redactor`** — applied to every `RunEvent` (`Content` and
+  `Args`, before `OnEvent` sees it), `RunResult.FinalText`, persisted
+  `RunStep.Content`, and error messages recorded on a span. The
+  defense-in-depth case: a script does `log(secret("API_KEY"))`, or a
+  `fetch()` response happens to echo a credential back, and that value
+  would otherwise reach whatever `OnEvent` forwards to, the persisted
+  trace, or a trace backend.
+- **`eval.NewService`'s 4th argument** — applied to the agent's response
+  before it reaches the judge's prompt (a third-party LLM call, see
+  [Evaluating agent quality](#evaluating-agent-quality) above) or gets
+  persisted in `CaseResult.Response`. An eval case exercises the same
+  capabilities production traffic does, so without this a case that
+  happens to trigger a credential-bearing response would send it on to
+  the judge and store it in the run.
+
+**One trade-off in `Config.Redactor`:** setting it suppresses
+`"response_chunk"` events — live token-by-token streaming. A secret value
+can split across two chunk boundaries with neither chunk containing the
+whole substring to redact against, so per-chunk redaction can't be made
+safe. The complete, redacted text still arrives via the terminal
+`"response"` event; only the incremental "typing" effect is lost.
 
 ## Next
 

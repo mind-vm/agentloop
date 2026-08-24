@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/jryannel/agentloop/llm"
+	"github.com/jryannel/agentloop/redact"
 	"github.com/jryannel/agentloop/sandbox"
 )
 
@@ -85,6 +86,26 @@ type Config struct {
 	// exporter pointed at a Jaeger collector) to observe Run calls in
 	// production — nothing else in this package needs to change.
 	TracerProvider trace.TracerProvider
+
+	// Redactor strips known secret values out of every surface this
+	// package writes free text to: RunEvent (Content and Args, before
+	// OnEvent sees it), RunResult.FinalText, persisted RunStep.Content
+	// (via Steps.Append), and error messages recorded on a span.
+	// Optional; nil is a safe no-op (see redact.Redactor) — the
+	// defense-in-depth case this exists for is a script that logs a
+	// fetched credential (log(secret("KEY")), or a fetch() response
+	// that echoes one back) and would otherwise carry it into
+	// whatever OnEvent forwards to, the persisted trace, or a trace
+	// backend. Build one with redact.FromSecrets over the secret
+	// values your capabilities can return this session.
+	//
+	// One trade-off: setting this suppresses "response_chunk" events
+	// (live token-by-token streaming). A secret can split across two
+	// chunk boundaries with neither chunk containing the whole value to
+	// match against, so per-chunk redaction can't be made safe — the
+	// complete, redacted text still arrives via the terminal "response"
+	// event instead.
+	Redactor *redact.Redactor
 }
 
 // SandboxBuilder produces the sandbox for one Run. The loop calls it
@@ -147,8 +168,9 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 	))
 	defer func() {
 		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+			rerr := redactErr(l.cfg.Redactor, err)
+			span.RecordError(rerr)
+			span.SetStatus(codes.Error, rerr.Error())
 		}
 		span.SetAttributes(
 			attribute.String(attrStatus, result.Status),
@@ -172,7 +194,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		// History is best-effort: a flaky read shouldn't deny the run
 		// its turn. Surface via the event stream and continue with an
 		// empty history.
-		emit(req.OnEvent, RunEvent{Type: "warning", Content: "history rehydrate failed: " + err.Error()})
+		l.emit(req.OnEvent, RunEvent{Type: "warning", Content: "history rehydrate failed: " + err.Error()})
 		priorSteps = nil
 	}
 	stepIdx := int32(len(priorSteps))
@@ -181,8 +203,13 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		step.StepIndex = stepIdx
 		step.SessionID = req.SessionID
 		step.CreatedAt = l.cfg.Now()
+		// Persisted, unlike the live RunEvent stream — a durable trace a
+		// human might review later is exactly the kind of surface
+		// Config.Redactor exists to protect, arguably more than the
+		// transient callback.
+		step.Content = l.cfg.Redactor.Apply(step.Content)
 		if err := l.cfg.Steps.Append(ctx, step); err != nil {
-			emit(req.OnEvent, RunEvent{Type: "warning", Content: "persist step failed: " + err.Error()})
+			l.emit(req.OnEvent, RunEvent{Type: "warning", Content: "persist step failed: " + err.Error()})
 		}
 		stepIdx++
 	}
@@ -194,7 +221,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		Content:  req.Message,
 		ToolArgs: json.RawMessage(`{}`),
 	})
-	emit(req.OnEvent, RunEvent{Type: "user", Content: req.Message})
+	l.emit(req.OnEvent, RunEvent{Type: "user", Content: req.Message})
 
 	var sysPromptCaptured string
 	var dataBytesCarried int64
@@ -208,11 +235,11 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 			DataBytesCarried: dataBytesCarried,
 		}
 		if err := l.cfg.Sessions.Finalize(ctx, req.SessionID, summary); err != nil {
-			emit(req.OnEvent, RunEvent{Type: "warning", Content: "finalize failed: " + err.Error()})
+			l.emit(req.OnEvent, RunEvent{Type: "warning", Content: "finalize failed: " + err.Error()})
 		}
 		return RunResult{
 			RunID:        req.SessionID,
-			FinalText:    usage.lastFinal,
+			FinalText:    l.cfg.Redactor.Apply(usage.lastFinal),
 			Steps:        int(stepIdx),
 			Status:       status,
 			SystemPrompt: sysPromptCaptured,
@@ -226,7 +253,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 
 	buildCtx, buildSpan := l.tracer.Start(ctx, spanSandboxBuild)
 	sb, cleanup, err := l.cfg.SandboxBuilder.Build(buildCtx, sess, req.Scope, func(evt sandbox.Event) {
-		emit(req.OnEvent, RunEvent{
+		l.emit(req.OnEvent, RunEvent{
 			Type:    "sandbox_event",
 			Content: evt.Summary,
 			Args: map[string]any{
@@ -239,8 +266,9 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		})
 	})
 	if err != nil {
-		buildSpan.RecordError(err)
-		buildSpan.SetStatus(codes.Error, err.Error())
+		rerr := redactErr(l.cfg.Redactor, err)
+		buildSpan.RecordError(rerr)
+		buildSpan.SetStatus(codes.Error, rerr.Error())
 	}
 	buildSpan.End()
 	if err != nil {
@@ -286,13 +314,29 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		))
 		defer func() {
 			if turnErr != nil {
-				turnSpan.RecordError(turnErr)
-				turnSpan.SetStatus(codes.Error, turnErr.Error())
+				rerr := redactErr(l.cfg.Redactor, turnErr)
+				turnSpan.RecordError(rerr)
+				turnSpan.SetStatus(codes.Error, rerr.Error())
 			}
 			turnSpan.End()
 		}()
 
-		streamer := newResponseStreamer(req.OnEvent)
+		// response_chunk events bypass l.emit (they're forwarded straight
+		// from the LLM client's streaming callback, chunk by chunk) and
+		// so can't go through the same redaction path — and can't be
+		// redacted chunk-by-chunk at all, since a secret value can split
+		// across two chunk boundaries with neither chunk containing the
+		// full substring to match against. When a Redactor is
+		// configured, suppress live streaming rather than risk a partial
+		// leak: newResponseStreamer(nil) still accumulates the full text
+		// for the post-stream DONE/JS-fence parsing below, it just emits
+		// no incremental events. The complete, redacted text still
+		// reaches the caller via the terminal "response" RunEvent.
+		streamOnEvent := req.OnEvent
+		if l.cfg.Redactor != nil {
+			streamOnEvent = nil
+		}
+		streamer := newResponseStreamer(streamOnEvent)
 		// Elide stale run() bodies: their effect already lives in `args`
 		// (state) and the logs (observations), so re-sending the verbatim
 		// source every turn is pure triangular accumulation. Keep only
@@ -320,8 +364,9 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		))
 		resp, err := l.cfg.LLM.Stream(llmCtx, llmReq, streamer.onChunk)
 		if err != nil {
-			llmSpan.RecordError(err)
-			llmSpan.SetStatus(codes.Error, err.Error())
+			rerr := redactErr(l.cfg.Redactor, err)
+			llmSpan.RecordError(rerr)
+			llmSpan.SetStatus(codes.Error, rerr.Error())
 		} else {
 			llmSpan.SetAttributes(
 				attribute.Int64(attrPromptTok, int64(resp.InputTokens)),
@@ -335,7 +380,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 				Content:  err.Error(),
 				ToolArgs: json.RawMessage(`{}`),
 			})
-			emit(req.OnEvent, RunEvent{Type: "error", Content: err.Error()})
+			l.emit(req.OnEvent, RunEvent{Type: "error", Content: err.Error()})
 			return finalize("error"), fmt.Errorf("agentloop: llm: %w", err), true
 		}
 		usage.prompt.Add(int32(resp.InputTokens))
@@ -354,7 +399,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		if strings.TrimSpace(replyText) == "" {
 			if emptyRetries < maxEmptyRetries {
 				emptyRetries++
-				emit(req.OnEvent, RunEvent{Type: "warning", Content: "empty model turn, retrying"})
+				l.emit(req.OnEvent, RunEvent{Type: "warning", Content: "empty model turn, retrying"})
 				turnSpan.AddEvent("empty model turn, retrying")
 				return RunResult{}, nil, false
 			}
@@ -363,7 +408,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 				Content:  ErrEmptyResponse.Error(),
 				ToolArgs: json.RawMessage(`{}`),
 			})
-			emit(req.OnEvent, RunEvent{Type: "error", Content: ErrEmptyResponse.Error()})
+			l.emit(req.OnEvent, RunEvent{Type: "error", Content: ErrEmptyResponse.Error()})
 			return finalize("error"), ErrEmptyResponse, true
 		}
 
@@ -392,7 +437,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 			Content:  jsCode,
 			ToolArgs: json.RawMessage(`{}`),
 		})
-		emit(req.OnEvent, RunEvent{Type: "execute_js", Content: jsCode})
+		l.emit(req.OnEvent, RunEvent{Type: "execute_js", Content: jsCode})
 
 		var resultContent string
 		var persistBlob json.RawMessage
@@ -400,8 +445,9 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		_, jsSpan := l.tracer.Start(tctx, spanExecuteJS)
 		logs, ret, execErr := sb.ExecuteTurn(jsCode, prevArgs)
 		if execErr != nil {
-			jsSpan.RecordError(execErr)
-			jsSpan.SetStatus(codes.Error, execErr.Error())
+			rerr := redactErr(l.cfg.Redactor, execErr)
+			jsSpan.RecordError(rerr)
+			jsSpan.SetStatus(codes.Error, rerr.Error())
 		}
 		jsSpan.End()
 		resultContent = logs
@@ -438,7 +484,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 			PromptTokens:     callPrompt,
 			CompletionTokens: callCompletion,
 		})
-		emit(req.OnEvent, RunEvent{
+		l.emit(req.OnEvent, RunEvent{
 			Type:    "execute_js_result",
 			Content: resultContent,
 			Tokens:  &CallTokens{Prompt: callPrompt, Completion: callCompletion},
@@ -446,12 +492,12 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 
 		if len(persistBlob) > 0 && string(persistBlob) != "{}" {
 			if err := l.cfg.Sessions.UpdateData(ctx, req.SessionID, persistBlob); err != nil {
-				emit(req.OnEvent, RunEvent{Type: "warning", Content: "data snapshot persist failed: " + err.Error()})
+				l.emit(req.OnEvent, RunEvent{Type: "warning", Content: "data snapshot persist failed: " + err.Error()})
 			}
 			var parsed any
 			if err := json.Unmarshal(persistBlob, &parsed); err == nil {
 				if m, ok := parsed.(map[string]any); ok {
-					emit(req.OnEvent, RunEvent{Type: "data_update", Args: m})
+					l.emit(req.OnEvent, RunEvent{Type: "data_update", Args: m})
 				}
 			}
 		}
@@ -468,7 +514,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 				PromptTokens:     callPrompt,
 				CompletionTokens: callCompletion,
 			})
-			emit(req.OnEvent, RunEvent{
+			l.emit(req.OnEvent, RunEvent{
 				Type:    "response",
 				Content: final,
 				Tokens:  &CallTokens{Prompt: callPrompt, Completion: callCompletion},
@@ -488,7 +534,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 
 	for iter := 0; iter < l.cfg.MaxIterations; iter++ {
 		if ctx.Err() != nil {
-			emit(req.OnEvent, RunEvent{Type: "error", Content: "context cancelled: " + ctx.Err().Error()})
+			l.emit(req.OnEvent, RunEvent{Type: "error", Content: "context cancelled: " + ctx.Err().Error()})
 			res := finalize("error")
 			return res, ctx.Err()
 		}
@@ -504,7 +550,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		Content:  errMsg,
 		ToolArgs: json.RawMessage(`{}`),
 	})
-	emit(req.OnEvent, RunEvent{Type: "error", Content: errMsg})
+	l.emit(req.OnEvent, RunEvent{Type: "error", Content: errMsg})
 	return finalize("max_iterations"), fmt.Errorf("agentloop: %s", errMsg)
 }
 
@@ -519,7 +565,7 @@ func (l *loop) respond(req RunRequest, writeStep func(RunStep), finalize func(st
 		PromptTokens:     usage.lastPrompt.Load(),
 		CompletionTokens: usage.lastCompletion.Load(),
 	})
-	emit(req.OnEvent, RunEvent{
+	l.emit(req.OnEvent, RunEvent{
 		Type:    "response",
 		Content: text,
 		Tokens:  &CallTokens{Prompt: usage.lastPrompt.Load(), Completion: usage.lastCompletion.Load()},
@@ -531,7 +577,7 @@ func (l *loop) respond(req RunRequest, writeStep func(RunStep), finalize func(st
 }
 
 func (l *loop) emitDone(req RunRequest, result RunResult) {
-	emit(req.OnEvent, RunEvent{
+	l.emit(req.OnEvent, RunEvent{
 		Type: "done",
 		Summary: &RunSummary{
 			SessionID:        req.SessionID,
@@ -557,8 +603,34 @@ type runTokenUsage struct {
 }
 
 // emit forwards a RunEvent to the request's callback when non-nil.
-func emit(fn func(RunEvent), evt RunEvent) {
-	if fn != nil {
-		fn(evt)
+// emit redacts evt (a no-op when Config.Redactor is nil) and forwards
+// it to fn when non-nil. The one choke point every RunEvent passes
+// through, so this is the one place redaction needs to be wired in.
+func (l *loop) emit(fn func(RunEvent), evt RunEvent) {
+	if fn == nil {
+		return
 	}
+	fn(redactEvent(l.cfg.Redactor, evt))
+}
+
+// redactEvent applies r to evt's free-text surfaces: Content directly,
+// and Args by marshaling to JSON, redacting the bytes, and
+// unmarshaling back — catching a secret at any nesting depth without
+// walking Args field by field (see the redact package doc comment).
+// Falls back to the original Args on any marshal/unmarshal error
+// rather than dropping the event's data.
+func redactEvent(r *redact.Redactor, evt RunEvent) RunEvent {
+	if r == nil {
+		return evt
+	}
+	evt.Content = r.Apply(evt.Content)
+	if evt.Args != nil {
+		if raw, err := json.Marshal(evt.Args); err == nil {
+			var out map[string]any
+			if json.Unmarshal(r.ApplyBytes(raw), &out) == nil {
+				evt.Args = out
+			}
+		}
+	}
+	return evt
 }

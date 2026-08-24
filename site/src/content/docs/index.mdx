@@ -56,7 +56,7 @@ kept verbatim — and large data never appears in the context window twice.
 
 [Why JavaScript instead of tool calls →](/agentloop/concepts/)
 
-## Eight packages, each independently useful
+## Nine packages, each independently useful
 
 <CardGrid>
   <Card title="agentloop" icon="random">
@@ -104,6 +104,12 @@ kept verbatim — and large data never appears in the context window twice.
   <Card title="evalmem" icon="database">
     In-memory `eval.Store` for local dev and CI — the same role
     `agentloopmem` plays for `SessionStore`/`StepStore`.
+  </Card>
+  <Card title="redact" icon="close">
+    `Redactor` strips known secret values out of text or bytes — a nil
+    `*Redactor` is a safe no-op everywhere it's used. Wired into
+    `Config.Redactor` and `eval.NewService` to keep secrets out of
+    events, traces, and judge prompts.
   </Card>
 </CardGrid>
 

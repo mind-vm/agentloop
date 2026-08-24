@@ -59,6 +59,11 @@ is kept verbatim) and large data never appears in the context window twice.
 - **`evalmem`** — in-memory `eval.Store` for local dev and CI, same
   role `agentloopmem` plays for `SessionStore`/`StepStore`. Not for
   production traffic.
+- **`redact`** — `Redactor`, a small ordered (value, placeholder) list
+  that strips known secret values out of text or bytes; a nil
+  `*Redactor` is a safe pass-through everywhere. `Config.Redactor` and
+  `eval.NewService`'s redactor parameter both take one — see
+  [Extending](#extending) for what it's wired into.
 
 ## Quickstart
 
@@ -225,7 +230,7 @@ every response 0–10, and persists the run:
 
 ```go
 store := evalmem.New() // or your own eval.Store
-svc := eval.NewService(store, loop, judgeClient)
+svc := eval.NewService(store, loop, judgeClient, nil) // last arg: optional *redact.Redactor
 
 suite, _ := svc.CreateSuite(ctx, "arithmetic", "" /* judge model, empty = client default */)
 svc.AddCase(ctx, suite.ID, "sums", "What's 2+2?", "must say 4", 7, nil)
@@ -252,6 +257,36 @@ aborting the suite — `RunSuite` always finishes and returns a `Run`.
 
 `evalmem.InMemoryStore` implements `eval.Store` for local dev and CI;
 back a real deployment with whatever persistence you already have.
+
+## Redacting secrets from observability
+
+`redact.Redactor` holds a small ordered list of (secret value,
+placeholder) pairs and strips every occurrence out of text or bytes —
+build one with `redact.FromSecrets(map[string]string{"api_key": key, ...})`
+over whatever values a session's capabilities can return. A nil
+`*Redactor` is a safe pass-through everywhere it's used, so this is
+entirely opt-in.
+
+Two places take one:
+
+- **`Config.Redactor`** — applied to every RunEvent (`Content` and
+  `Args`, before `OnEvent` sees it), `RunResult.FinalText`, persisted
+  `RunStep.Content`, and error messages recorded on a span. The
+  defense-in-depth case: a script does `log(secret("API_KEY"))`, or a
+  `fetch()` response happens to echo a credential back, and that value
+  would otherwise land in whatever `OnEvent` forwards to, the
+  persisted trace, or a trace backend. One trade-off: setting this
+  suppresses `"response_chunk"` events (live token-by-token
+  streaming), because a secret can split across two chunk boundaries
+  with neither chunk containing the whole value to redact against —
+  the complete, redacted text still arrives via the terminal
+  `"response"` event.
+- **`eval.NewService`'s 4th argument** — applied to the agent's
+  response before it reaches the judge's prompt (a third-party LLM
+  call) or gets persisted in `CaseResult.Response`. An eval case
+  exercises the same capabilities production traffic does, so without
+  this a case that happens to trigger a credential-bearing response
+  would send it on to the judge and store it in the run.
 
 ## Known limitations
 

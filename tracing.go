@@ -1,8 +1,12 @@
 package agentloop
 
 import (
+	"errors"
+
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/jryannel/agentloop/redact"
 )
 
 // instrumentationName identifies this package as the span source, per
@@ -45,4 +49,22 @@ func resolveTracer(tp trace.TracerProvider) trace.Tracer {
 		tp = noop.NewTracerProvider()
 	}
 	return tp.Tracer(instrumentationName)
+}
+
+// redactErr applies r to err's message before it reaches a span. A
+// span's recorded exception message is exactly the kind of free text
+// redactEvent already covers for RunEvent — an LLM/HTTP error can echo
+// a request detail (a header, a URL with a token in it) back verbatim.
+// Returns err unchanged when r is nil or the message needed no
+// changes, so the common case allocates nothing extra.
+func redactErr(r *redact.Redactor, err error) error {
+	if r == nil || err == nil {
+		return err
+	}
+	msg := err.Error()
+	redacted := r.Apply(msg)
+	if redacted == msg {
+		return err
+	}
+	return errors.New(redacted)
 }

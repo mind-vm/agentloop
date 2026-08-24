@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/jryannel/agentloop/eval"
 	"github.com/jryannel/agentloop/evalmem"
 	"github.com/jryannel/agentloop/llm"
+	"github.com/jryannel/agentloop/redact"
 )
 
 // fakeRunner is an agentloop.Loop whose response is scripted by
@@ -79,7 +81,7 @@ func TestService_RunSuite_LegacySingleRubric(t *testing.T) {
 	runner := &fakeRunner{byInput: map[string]string{"what is 2+2?": "4"}}
 	judge := &fakeJudge{reply: func(int, llm.CompletionRequest) string { return scoreReply(9, "correct and concise") }}
 
-	svc := eval.NewService(store, runner, judge)
+	svc := eval.NewService(store, runner, judge, nil)
 	run, err := svc.RunSuite(ctx, suite.ID)
 	if err != nil {
 		t.Fatalf("RunSuite: %v", err)
@@ -121,7 +123,7 @@ func TestService_RunSuite_PerCriterionRubric_AllMustPass(t *testing.T) {
 		return scoreReply(scores[call], "rationale")
 	}}
 
-	svc := eval.NewService(store, runner, judge)
+	svc := eval.NewService(store, runner, judge, nil)
 	run, err := svc.RunSuite(ctx, suite.ID)
 	if err != nil {
 		t.Fatalf("RunSuite: %v", err)
@@ -172,7 +174,7 @@ func TestService_RunSuite_AgentErrorDoesNotAbortSuite(t *testing.T) {
 	})
 	judge := &fakeJudge{reply: func(int, llm.CompletionRequest) string { return scoreReply(8, "fine") }}
 
-	svc := eval.NewService(store, custom, judge)
+	svc := eval.NewService(store, custom, judge, nil)
 	run, err := svc.RunSuite(ctx, suite.ID)
 	if err != nil {
 		t.Fatalf("RunSuite: %v", err)
@@ -214,7 +216,7 @@ func TestService_RunSuite_NoJudgeConfigured(t *testing.T) {
 	}
 	runner := &fakeRunner{byInput: map[string]string{"hi": "hello"}}
 
-	svc := eval.NewService(store, runner, nil)
+	svc := eval.NewService(store, runner, nil, nil)
 	run, err := svc.RunSuite(ctx, suite.ID)
 	if err != nil {
 		t.Fatalf("RunSuite: %v", err)
@@ -236,7 +238,7 @@ func TestService_RunSuite_EachCaseGetsAFreshSession(t *testing.T) {
 	runner := &fakeRunner{byInput: map[string]string{"input0": "a", "input1": "b", "input2": "c"}}
 	judge := &fakeJudge{reply: func(int, llm.CompletionRequest) string { return scoreReply(8, "ok") }}
 
-	svc := eval.NewService(store, runner, judge)
+	svc := eval.NewService(store, runner, judge, nil)
 	if _, err := svc.RunSuite(ctx, suite.ID); err != nil {
 		t.Fatalf("RunSuite: %v", err)
 	}
@@ -260,7 +262,7 @@ func TestService_AddCase_DefaultsPassThresholdAndItemMinScore(t *testing.T) {
 	ctx := context.Background()
 	suite, _ := store.CreateSuite(ctx, "s1", "")
 	runner := &fakeRunner{}
-	svc := eval.NewService(store, runner, nil)
+	svc := eval.NewService(store, runner, nil, nil)
 
 	c, err := svc.AddCase(ctx, suite.ID, "case1", "in", "", 0, []eval.CriterionItem{
 		{Label: "a"},              // MinScore 0 -> should default
@@ -280,12 +282,61 @@ func TestService_AddCase_DefaultsPassThresholdAndItemMinScore(t *testing.T) {
 	}
 }
 
+// TestService_RunSuite_RedactsResponseBeforeJudgeAndPersistence proves
+// the secret value never reaches the judge's prompt and never lands in
+// the persisted CaseResult.Response — the two leak vectors NewService's
+// redactor parameter exists to close.
+func TestService_RunSuite_RedactsResponseBeforeJudgeAndPersistence(t *testing.T) {
+	store := evalmem.New()
+	ctx := context.Background()
+	suite, _ := store.CreateSuite(ctx, "s1", "")
+	if _, err := store.AddCase(ctx, suite.ID, "case1", "fetch the key", "", 7, nil); err != nil {
+		t.Fatalf("AddCase: %v", err)
+	}
+
+	const secretValue = "sk-live-super-secret"
+	runner := &fakeRunner{byInput: map[string]string{
+		"fetch the key": "here is the key: " + secretValue,
+	}}
+
+	var judgePrompt string
+	judge := &fakeJudge{reply: func(_ int, req llm.CompletionRequest) string {
+		for _, m := range req.Messages {
+			judgePrompt += m.Content
+		}
+		return scoreReply(9, "fine")
+	}}
+
+	redactor := redact.FromSecrets(map[string]string{"api_key": secretValue})
+	svc := eval.NewService(store, runner, judge, redactor)
+
+	run, err := svc.RunSuite(ctx, suite.ID)
+	if err != nil {
+		t.Fatalf("RunSuite: %v", err)
+	}
+
+	if strings.Contains(judgePrompt, secretValue) {
+		t.Fatalf("secret leaked into the judge prompt: %q", judgePrompt)
+	}
+	if !strings.Contains(judgePrompt, "[redacted:secret.api_key]") {
+		t.Fatalf("expected the redaction placeholder in the judge prompt: %q", judgePrompt)
+	}
+
+	r := run.Results[0]
+	if strings.Contains(r.Response, secretValue) {
+		t.Fatalf("secret leaked into the persisted CaseResult.Response: %q", r.Response)
+	}
+	if !strings.Contains(r.Response, "[redacted:secret.api_key]") {
+		t.Fatalf("expected the redaction placeholder in CaseResult.Response: %q", r.Response)
+	}
+}
+
 func TestNewService_PanicsOnNilStoreOrRunner(t *testing.T) {
 	store := evalmem.New()
 	runner := &fakeRunner{}
 
-	assertPanics(t, "nil store", func() { eval.NewService(nil, runner, nil) })
-	assertPanics(t, "nil runner", func() { eval.NewService(store, nil, nil) })
+	assertPanics(t, "nil store", func() { eval.NewService(nil, runner, nil, nil) })
+	assertPanics(t, "nil runner", func() { eval.NewService(store, nil, nil, nil) })
 }
 
 func assertPanics(t *testing.T, name string, fn func()) {

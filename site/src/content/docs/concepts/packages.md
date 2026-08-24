@@ -91,6 +91,15 @@ runner needs, so `Service` takes one directly — no adapter interface. See
 In-memory `eval.Store` for local dev and CI — the same role `agentloopmem`
 plays for `SessionStore`/`StepStore`. Not for production traffic.
 
+## `redact`
+
+`Redactor` holds a small ordered (secret value, placeholder) list and
+strips every occurrence out of text or bytes. A nil `*Redactor` is a safe
+pass-through everywhere it's used, so it's entirely opt-in — build one
+with `redact.FromSecrets(...)` and hand it to `Config.Redactor` or
+`eval.NewService`. See [Redacting secrets from
+observability](/agentloop/extending/#redacting-secrets-from-observability).
+
 ## Next
 
 [Extending agentloop](/agentloop/extending/) covers the seams — capabilities,

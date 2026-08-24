@@ -10,6 +10,7 @@ import (
 
 	"github.com/jryannel/agentloop"
 	"github.com/jryannel/agentloop/llm"
+	"github.com/jryannel/agentloop/redact"
 )
 
 // Service is the eval-harness entry point. CRUD methods are thin
@@ -17,9 +18,10 @@ import (
 // each case through runner, have judge rate the response, persist the
 // run.
 type Service struct {
-	store  Store
-	runner agentloop.Loop
-	judge  llm.Client // may be nil: cases then record "no judge configured" rather than a score
+	store    Store
+	runner   agentloop.Loop
+	judge    llm.Client // may be nil: cases then record "no judge configured" rather than a score
+	redactor *redact.Redactor
 }
 
 // NewService wires the harness. store and runner are required and
@@ -27,14 +29,22 @@ type Service struct {
 // not on the first RunSuite call. judge may be nil if the harness is
 // only used for Suite/Case CRUD (e.g. an admin UI) and RunSuite is
 // never called.
-func NewService(store Store, runner agentloop.Loop, judge llm.Client) *Service {
+//
+// redactor, if non-nil, is applied to the agent's response before it
+// reaches the judge prompt or CaseResult.Response — an eval case
+// exercises the same capabilities production traffic does, so a case
+// whose input happens to trigger secret(...) or a credential-echoing
+// fetch() response would otherwise send that value on to a
+// third-party judge LLM and persist it in the stored run. Pass nil for
+// no redaction.
+func NewService(store Store, runner agentloop.Loop, judge llm.Client, redactor *redact.Redactor) *Service {
 	if store == nil {
 		panic("eval: store is required")
 	}
 	if runner == nil {
 		panic("eval: runner is required")
 	}
-	return &Service{store: store, runner: runner, judge: judge}
+	return &Service{store: store, runner: runner, judge: judge, redactor: redactor}
 }
 
 // ---- CRUD ----
@@ -147,7 +157,11 @@ func (s *Service) runCase(ctx context.Context, suite Suite, c Case) CaseResult {
 		out.Error = err.Error()
 		return out
 	}
-	out.Response = res.FinalText
+	// Redacted before it touches anything else: CaseResult.Response is
+	// persisted, and the judge (a third-party LLM call, see judge.go)
+	// gets it verbatim in its prompt otherwise.
+	response := s.redactor.Apply(res.FinalText)
+	out.Response = response
 
 	if s.judge == nil {
 		out.Error = "eval: no judge llm.Client configured"
@@ -166,7 +180,7 @@ func (s *Service) runCase(ctx context.Context, suite Suite, c Case) CaseResult {
 			if min <= 0 {
 				min = int(c.PassThreshold)
 			}
-			score, rationale, jerr := judgeCriterion(ctx, s.judge, suite.JudgeModel, c, res.FinalText, it)
+			score, rationale, jerr := judgeCriterion(ctx, s.judge, suite.JudgeModel, c, response, it)
 			if jerr != nil {
 				out.Error = jerr.Error()
 				return out
@@ -189,7 +203,7 @@ func (s *Service) runCase(ctx context.Context, suite Suite, c Case) CaseResult {
 
 	// Legacy single-rubric path: kept for cases authored before the
 	// per-criterion rubric existed (CriteriaItems empty).
-	score, rationale, jerr := judgeResponse(ctx, s.judge, suite.JudgeModel, c, res.FinalText)
+	score, rationale, jerr := judgeResponse(ctx, s.judge, suite.JudgeModel, c, response)
 	if jerr != nil {
 		out.Error = jerr.Error()
 		return out

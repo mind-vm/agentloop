@@ -61,7 +61,7 @@ func TestRunSuite_AgainstARealLoop(t *testing.T) {
 		t.Fatalf("AddCase: %v", err)
 	}
 
-	svc := eval.NewService(store, loop, judgeLLM)
+	svc := eval.NewService(store, loop, judgeLLM, nil)
 	run, err := svc.RunSuite(ctx, suite.ID)
 	if err != nil {
 		t.Fatalf("RunSuite: %v", err)
