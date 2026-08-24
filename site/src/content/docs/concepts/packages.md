@@ -78,6 +78,19 @@ other `SandboxBuilder`. See [Extending → Session-scoped sandbox
 reuse](/agentloop/extending/#session-scoped-sandbox-reuse) for the
 correctness problem it has to solve to do that safely.
 
+## `eval`
+
+An LLM-judged eval harness: a `Suite` of `Case`s (input + judge criteria),
+each dispatched through an `agentloop.Loop` and scored 0–10 by a judge
+`llm.Client`. `Loop`'s own `Run` method already has exactly the shape a
+runner needs, so `Service` takes one directly — no adapter interface. See
+[Evaluating agent quality](/agentloop/extending/#evaluating-agent-quality).
+
+## `evalmem`
+
+In-memory `eval.Store` for local dev and CI — the same role `agentloopmem`
+plays for `SessionStore`/`StepStore`. Not for production traffic.
+
 ## Next
 
 [Extending agentloop](/agentloop/extending/) covers the seams — capabilities,

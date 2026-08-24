@@ -1,6 +1,6 @@
 ---
 title: Extending agentloop
-description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, OpenAPI-generated skills, session-scoped sandbox reuse, and distributed tracing — the seams agentloop is designed to be extended through.
+description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, OpenAPI-generated skills, session-scoped sandbox reuse, distributed tracing, and evaluating agent quality.
 sidebar:
   order: 1
 ---
@@ -8,7 +8,8 @@ sidebar:
 agentloop ships a minimal default (`DefaultCapabilities`,
 `DefaultSandboxBuilder`, `agentloopmem`'s in-memory stores,
 `sandbox.DefaultPolicy`) that's enough to run the quickstart, and eight seams
-meant to be replaced for a real application.
+meant to be replaced for a real application — plus an eval harness for
+checking whether replacing them made things better or worse.
 
 ## Custom capabilities
 
@@ -304,6 +305,42 @@ A JS execution error (the model's script threw) is recorded on
 `agentloop.execute_js` alone, not on the enclosing `agentloop.turn` — the
 turn itself didn't fail, it fed the error back to the model and kept going,
 so only the span for the operation that actually errored is marked.
+
+## Evaluating agent quality
+
+`eval.Service` runs a `Suite` of `Case`s — each an input plus judge
+criteria — through an `agentloop.Loop`, has a judge `llm.Client` score
+every response 0–10, and persists the run:
+
+```go
+store := evalmem.New() // or your own eval.Store
+svc := eval.NewService(store, loop, judgeClient)
+
+suite, _ := svc.CreateSuite(ctx, "arithmetic", "" /* judge model, empty = client default */)
+svc.AddCase(ctx, suite.ID, "sums", "What's 2+2?", "must say 4", 7, nil)
+
+run, err := svc.RunSuite(ctx, suite.ID)
+// run.Summary.Passed / .Failed; run.Results[i].{Response, Score, Rationale, Passed}
+```
+
+`agentloop.Loop`'s `Run(ctx, RunRequest) (RunResult, error)` already has
+exactly the shape an eval-harness runner needs — `RunResult.FinalText` is
+the response to judge — so `Service` takes a `Loop` directly rather than a
+separate runner interface. Each case gets its own fresh, never-reused
+session ID: `agentloop.SessionStore.Get` is documented to auto-create a
+shell for an unknown ID, so `RunSuite` needs no separate
+session-provisioning step of its own.
+
+A `Case` carries either a single `Criteria` string + `PassThreshold` (the
+legacy path), or a per-criterion `CriteriaItems` rubric — when set, the
+judge scores each item separately and the case passes only when **every**
+item clears its own `MinScore`, with the overall `Score` reported as the
+average across items. A case that errors (agent failure or judge failure)
+records the error inline on that case's result rather than aborting the
+suite — `RunSuite` always finishes and returns a `Run`.
+
+`evalmem.InMemoryStore` implements `eval.Store` for local dev and CI; back
+a real deployment with whatever persistence you already have.
 
 ## Next
 

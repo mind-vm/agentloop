@@ -56,7 +56,7 @@ kept verbatim — and large data never appears in the context window twice.
 
 [Why JavaScript instead of tool calls →](/agentloop/concepts/)
 
-## Six packages, each independently useful
+## Eight packages, each independently useful
 
 <CardGrid>
   <Card title="agentloop" icon="random">
@@ -95,6 +95,15 @@ kept verbatim — and large data never appears in the context window twice.
     of rebuilding one — and every pack's registration — on every message,
     without leaking a stale context or racing two `Run`s on one
     `goja.Runtime`.
+  </Card>
+  <Card title="eval" icon="analytics">
+    An LLM-judged eval harness — a `Suite` of `Case`s dispatched through a
+    `Loop` and scored by a judge `llm.Client`. `Loop`'s own `Run` already has
+    the shape a runner needs, so `Service` takes one directly.
+  </Card>
+  <Card title="evalmem" icon="database">
+    In-memory `eval.Store` for local dev and CI — the same role
+    `agentloopmem` plays for `SessionStore`/`StepStore`.
   </Card>
 </CardGrid>
 
