@@ -69,6 +69,87 @@ func TestSlugify(t *testing.T) {
 	}
 }
 
+func TestTsType(t *testing.T) {
+	cases := map[string]string{
+		"string":  "string",
+		"integer": "number",
+		"number":  "number",
+		"boolean": "boolean",
+		"array":   "any[]",
+		"object":  "any",
+		"":        "any",
+		"unknown": "any",
+	}
+	for in, want := range cases {
+		if got := tsType(in); got != want {
+			t.Errorf("tsType(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRenderFunctionDecl(t *testing.T) {
+	cases := []struct {
+		name string
+		op   operation
+		want string
+	}{
+		{
+			name: "no params",
+			op:   operation{funcName: "ping", method: "GET", path: "/ping"},
+			want: "/** GET /ping */\ndeclare function ping(params?: {}): " + responseTypeJS + ";\n",
+		},
+		{
+			name: "required path param makes params required",
+			op: operation{
+				funcName:   "getPetById",
+				method:     "GET",
+				path:       "/pets/{petId}",
+				summary:    "Get a pet",
+				pathParams: []param{{name: "petId", required: true, typ: "string"}},
+			},
+			want: "/** Get a pet */\ndeclare function getPetById(params: { petId: string; }): " + responseTypeJS + ";\n",
+		},
+		{
+			name: "optional query param",
+			op: operation{
+				funcName:    "listPets",
+				method:      "GET",
+				path:        "/pets",
+				queryParams: []param{{name: "limit", required: false, typ: "integer"}},
+			},
+			want: "/** GET /pets */\ndeclare function listPets(params?: { limit?: number; }): " + responseTypeJS + ";\n",
+		},
+		{
+			name: "required body makes params required",
+			op: operation{
+				funcName:     "createPet",
+				method:       "POST",
+				path:         "/pets",
+				hasBody:      true,
+				bodyRequired: true,
+			},
+			want: "/** POST /pets */\ndeclare function createPet(params: { body: any; // JSON-serialized request body }): " + responseTypeJS + ";\n",
+		},
+		{
+			name: "optional body keeps params optional",
+			op: operation{
+				funcName: "search",
+				method:   "GET",
+				path:     "/search",
+				hasBody:  true,
+			},
+			want: "/** GET /search */\ndeclare function search(params?: { body?: any; // JSON-serialized request body }): " + responseTypeJS + ";\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := renderFunctionDecl(c.op); got != c.want {
+				t.Errorf("renderFunctionDecl() =\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestPathExprJS(t *testing.T) {
 	cases := map[string]string{
 		"/pets":                 `BASE_URL + "/pets"`,

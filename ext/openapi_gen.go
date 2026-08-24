@@ -18,16 +18,20 @@ type operation struct {
 	method       string
 	path         string // the raw OpenAPI path template, e.g. "/pets/{petId}"
 	summary      string
-	pathParams   []string // sanitized JS identifiers, in path order
-	queryParams  []queryParam
+	pathParams   []param // always required, per the OpenAPI spec; sorted by name
+	queryParams  []param
 	hasBody      bool
 	bodyRequired bool
 }
 
-type queryParam struct {
-	name     string // sanitized JS identifier
+// param is one path or query parameter, reduced to what rendering
+// needs: a JS-safe identifier, whether it's required, and an OpenAPI
+// schema type ("string", "integer", ...) for the generated TS
+// declaration — display purposes only, no runtime validation.
+type param struct {
+	name     string
 	required bool
-	typ      string // display type for docs only: "string", "integer", ...
+	typ      string
 }
 
 // collectOperations walks every path × method in spec, keeping only
@@ -82,20 +86,20 @@ func extractOperation(item *openapi3.PathItem, op *openapi3.Operation, method, p
 	name = dedupeName(name, used)
 
 	params := mergeParameters(item.Parameters, op.Parameters)
-	var pathParams []string
-	var queryParams []queryParam
+	var pathParams []param
+	var queryParams []param
 	for _, p := range params {
 		switch p.In {
 		case "path":
-			pathParams = append(pathParams, sanitizeIdent(p.Name))
+			// Path parameters are always required, per the OpenAPI spec
+			// (a $ref or authoring error that says otherwise is not
+			// something to trust over that rule).
+			pathParams = append(pathParams, param{name: sanitizeIdent(p.Name), required: true, typ: schemaTypeOf(p.Schema)})
 		case "query":
-			queryParams = append(queryParams, queryParam{
-				name:     sanitizeIdent(p.Name),
-				required: p.Required,
-				typ:      schemaTypeOf(p.Schema),
-			})
+			queryParams = append(queryParams, param{name: sanitizeIdent(p.Name), required: p.Required, typ: schemaTypeOf(p.Schema)})
 		}
 	}
+	sort.Slice(pathParams, func(i, j int) bool { return pathParams[i].name < pathParams[j].name })
 	sort.Slice(queryParams, func(i, j int) bool { return queryParams[i].name < queryParams[j].name })
 
 	hasBody := false
@@ -158,6 +162,20 @@ func specTitle(spec *openapi3.T) string {
 		return ""
 	}
 	return spec.Info.Title
+}
+
+func specDescription(spec *openapi3.T) string {
+	if spec.Info == nil {
+		return ""
+	}
+	return spec.Info.Description
+}
+
+func specVersion(spec *openapi3.T) string {
+	if spec.Info == nil {
+		return ""
+	}
+	return spec.Info.Version
 }
 
 var nonSlugRe = regexp.MustCompile(`[^a-z0-9]+`)

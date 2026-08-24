@@ -60,11 +60,13 @@ var defaultOpenAPIMethods = []string{
 //
 // Following the skill-lazy-loading pattern the rest of agentloop's
 // skill mechanism uses (see sandbox.SkillDiscoveryPack's doc comment),
-// the returned Pack's Prompt is empty — a spec can have far more
-// operations than are worth inlining into every system prompt. Only
-// Name and Description reach skillList(); the full per-operation
-// documentation is registered as a HelpEntry under Name, so
-// skillGet(name) returns it on demand.
+// the returned Pack's Prompt is a single short line — the API's name,
+// operation count, and a pointer to skillGet(name)/require(name) — not
+// the full API surface; a spec can have far more operations than are
+// worth inlining into every turn. The full per-operation documentation
+// is TypeScript ambient declarations (`declare function ...`), in the
+// same style the core packs' Prompt fields already use, registered as
+// a HelpEntry under Name so skillGet(name) returns it on demand.
 //
 // Parameters are passed as a single options object rather than
 // positionally — `functionName(params)`, with params.<name> for each
@@ -117,11 +119,12 @@ func OpenAPIPack(spec *openapi3.T, cfg OpenAPIConfig) (sandbox.Pack, error) {
 		return sandbox.Pack{}, fmt.Errorf("ext: OpenAPIPack: spec %q produced no operations (check Methods and that the spec has paths)", name)
 	}
 
-	moduleJS, docs := renderSkill(baseURL, cfg.Headers, ops)
+	moduleJS, docs := renderSkill(specTitle(spec), specDescription(spec), specVersion(spec), baseURL, cfg.Headers, ops)
 
 	return sandbox.Pack{
 		Name:        name,
 		Description: description,
+		Prompt:      shortIntro(specTitle(spec), name, len(ops)),
 		HelpEntries: map[string]string{name: docs},
 		Register: func(_ *goja.Runtime, sb *sandbox.Sandbox) {
 			sb.AddSkillCode(name, moduleJS)

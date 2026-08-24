@@ -165,14 +165,40 @@ OpenAPI `securitySchemes` are not interpreted; there's no OAuth flow, no
 per-call credential resolution. This covers the common case (one API
 key or token for the whole skill) and nothing beyond it.
 
-**The skill stays out of the system prompt.** Following the
-lazy-loading pattern `sandbox.SkillDiscoveryPack` already uses (see
-[Packages](/agentloop/concepts/packages/)), the generated `Pack`'s
-system-prompt contribution is empty — a spec can have far more
-operations than are worth inlining into every turn. The model
-discovers the skill via `skillList()` (name + one-line description) and
-pulls the full per-operation documentation via `skillGet(<skill name>)`
-only when it decides to use it.
+**A short pointer in the prompt, TypeScript declarations behind
+`skillGet()`.** A spec can have far more operations than are worth
+inlining into every turn, so the generated `Pack`'s `Prompt` — always
+visible, like every pack's — is one line: the API's name, its
+operation count, and a reminder to call `skillGet`/`require`:
+
+```
+// --- Pet Store (skill: pet-store) ---
+/** Pet Store — 2 operation(s). skillGet("pet-store") for the full TypeScript API; require("pet-store") to call it. */
+```
+
+`skillGet("pet-store")` returns the real API surface: an intro (title,
+version, description, base URL) followed by one TypeScript ambient
+declaration per operation — the same `declare function` style the core
+packs' own `Prompt` fields already use, so a generated skill's API
+reads the same way a built-in one does:
+
+```
+Pet Store (v1.0.0)
+
+Base URL: https://api.petstore.example — 2 operation(s) below.
+Every function takes one params object and returns { status: number; body: string; headers: Record<string, string> } — body is a raw string, JSON.parse it if the response is JSON.
+
+/** Create a pet */
+declare function createPet(params: { body: any; // JSON-serialized request body }): { status: number; body: string; headers: Record<string, string> };
+/** Get a pet by ID */
+declare function getPetById(params: { petId: string; verbose?: boolean; }): { status: number; body: string; headers: Record<string, string> };
+```
+
+A parameter is optional in the declaration (`verbose?:`) exactly when
+OpenAPI marks it non-required; `params` itself is only optional
+(`params?:`) when nothing inside it — no path parameter (always
+required), no required query parameter, no required body — forces the
+caller's hand.
 
 A few things worth knowing before pointing this at a real spec:
 

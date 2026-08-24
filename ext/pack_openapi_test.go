@@ -66,14 +66,29 @@ func TestOpenAPIPack_NameAndDescriptionDefaults(t *testing.T) {
 	if pack.Description != "Pet Store" {
 		t.Errorf("Description: got %q, want %q", pack.Description, "Pet Store")
 	}
-	if pack.Prompt != "" {
-		t.Errorf("Prompt: got %q, want empty (skills stay out of the system prompt)", pack.Prompt)
+	// The Prompt is a short always-visible pointer, not the full API —
+	// it must name the skill and how to get more, without inlining every
+	// operation's signature into the system prompt.
+	for _, want := range []string{"Pet Store", `skillGet("pet-store")`, `require("pet-store")`} {
+		if !strings.Contains(pack.Prompt, want) {
+			t.Errorf("Prompt missing %q:\n%s", want, pack.Prompt)
+		}
 	}
+	if strings.Contains(pack.Prompt, "declare function") {
+		t.Errorf("Prompt should not contain full declarations — those belong behind skillGet(), got:\n%s", pack.Prompt)
+	}
+
+	// skillGet() docs are TypeScript ambient declarations, one per
+	// operation, with an intro naming the API and its base URL.
 	docs, ok := pack.HelpEntries["pet-store"]
 	if !ok {
 		t.Fatalf("HelpEntries[%q] missing", "pet-store")
 	}
-	for _, want := range []string{"getPetById", "createPet", "params.petId", "params.verbose", "params.body"} {
+	for _, want := range []string{
+		"Pet Store (v1.0.0)",
+		"declare function getPetById(params: { petId: string; verbose?: boolean; }): { status: number; body: string; headers: Record<string, string> };",
+		"declare function createPet(params: { body: any", // requestBody.required = true in the fixture
+	} {
 		if !strings.Contains(docs, want) {
 			t.Errorf("docs missing %q:\n%s", want, docs)
 		}

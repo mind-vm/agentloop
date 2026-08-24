@@ -133,12 +133,16 @@ export OPENAI_CHAT_MODEL=google/gemini-2.5-flash
   `require(<skill name>)` is gated by that name like any other skill.
   `cfg.Headers` is the whole auth story (a static header map — bearer
   token, API key — applied to every call); OpenAPI `securitySchemes`
-  aren't interpreted. Following the skill-laziness pattern the rest of
-  agentloop's skill mechanism uses, the generated Pack's system-prompt
-  contribution is empty — a spec can have far more operations than are
-  worth inlining into every turn — so the model discovers it via
-  `skillList()` and pulls the full per-operation docs via
-  `skillGet(<skill name>)` only when it needs them:
+  aren't interpreted. The generated `Pack`'s `Prompt` is one short line
+  (API name, operation count, a pointer to `skillGet`/`require`) rather
+  than the full surface — a spec can have far more operations than are
+  worth inlining into every turn. The full docs, returned by
+  `skillGet(<skill name>)` on demand, are TypeScript ambient
+  declarations — `declare function getPetById(params: { petId: string;
+  verbose?: boolean }): { status: number; body: string; headers:
+  Record<string, string> };` — in the same style the core packs' own
+  `Prompt` fields already use, so a generated skill's API reads the
+  same way a built-in one does:
 
   ```go
   spec, err := openapi3.NewLoader().LoadFromFile("petstore.yaml")

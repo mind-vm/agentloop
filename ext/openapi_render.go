@@ -20,10 +20,19 @@ const mergeHeadersHelperJS = `function _mergeHeaders(a, b) {
 }
 `
 
+// responseTypeJS is the TypeScript type every generated function
+// returns — the same {status, body, headers} shape fetch() and
+// require('http') already return.
+const responseTypeJS = "{ status: number; body: string; headers: Record<string, string> }"
+
 // renderSkill renders the full require()-able module source and the
 // skillGet() docs text for ops, in the order given (collectOperations
-// already sorted it deterministically).
-func renderSkill(baseURL string, headers map[string]string, ops []operation) (moduleJS, docs string) {
+// already sorted it deterministically). docs opens with a short intro
+// (title, description, version, base URL) followed by one TypeScript
+// `declare function` per operation — the same declaration style the
+// core packs' Prompt fields already use, so the model reads a
+// generated skill's API the same way it reads a built-in one.
+func renderSkill(title, description, version, baseURL string, headers map[string]string, ops []operation) (moduleJS, docs string) {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	if headers == nil {
 		headers = map[string]string{}
@@ -42,17 +51,57 @@ func renderSkill(baseURL string, headers map[string]string, ops []operation) (mo
 	js.WriteString("\n")
 
 	var doc strings.Builder
-	fmt.Fprintf(&doc, "REST API — %d operation(s), base URL %s.\n", len(ops), baseURL)
-	doc.WriteString("Every function takes one params object and returns {status, body, headers} — same shape as fetch()/require('http') — body is a raw string, JSON.parse it if the response is JSON.\n\n")
+	doc.WriteString(introText(title, description, version, baseURL, len(ops)))
+	doc.WriteString("\n\n")
 
 	for _, op := range ops {
 		js.WriteString(renderFunctionJS(op))
 		js.WriteString("\n")
-		doc.WriteString(renderFunctionDoc(op))
-		doc.WriteString("\n")
+		doc.WriteString(renderFunctionDecl(op))
 	}
 
 	return js.String(), strings.TrimRight(doc.String(), "\n")
+}
+
+// introText is the paragraph skillGet() opens with, ahead of the
+// per-operation declarations: what this API is, and the response
+// shape every generated function shares (stated once here rather than
+// repeated in every function's doc comment).
+func introText(title, description, version, baseURL string, opCount int) string {
+	var b strings.Builder
+	header := title
+	if header == "" {
+		header = "REST API"
+	}
+	if version != "" {
+		fmt.Fprintf(&b, "%s (v%s)\n", header, version)
+	} else {
+		fmt.Fprintf(&b, "%s\n", header)
+	}
+	if description != "" {
+		b.WriteString(description)
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "\nBase URL: %s — %d operation(s) below.\n", baseURL, opCount)
+	b.WriteString("Every function takes one params object and returns " + responseTypeJS +
+		" — body is a raw string, JSON.parse it if the response is JSON.")
+	return b.String()
+}
+
+// shortIntro is the one-line summary that goes in the generated
+// Pack's Prompt field — always visible in the system prompt, unlike
+// the full declarations in skillGet(), which the model only pays for
+// when it asks. Tells the model the skill exists and how to get more
+// without inlining the API surface itself.
+func shortIntro(title, name string, opCount int) string {
+	subject := title
+	if subject == "" {
+		subject = "A REST API"
+	}
+	return fmt.Sprintf(
+		"// --- %s (skill: %s) ---\n/** %s — %d operation(s). skillGet(%q) for the full TypeScript API; require(%q) to call it. */",
+		subject, name, subject, opCount, name, name,
+	)
 }
 
 func renderFunctionJS(op operation) string {
@@ -88,30 +137,78 @@ func renderFunctionJS(op operation) string {
 	return b.String()
 }
 
-func renderFunctionDoc(op operation) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s(params) — %s %s\n", op.funcName, op.method, op.path)
-	if op.summary != "" {
-		fmt.Fprintf(&b, "  %s\n", op.summary)
+// renderFunctionDecl renders one operation as a TypeScript ambient
+// function declaration, in the same style the core packs' Prompt
+// fields already use (see e.g. sandbox.FetchPack) — a /** summary */
+// doc comment above a `declare function` signature, so a generated
+// skill's API reads the same way a built-in one does.
+func renderFunctionDecl(op operation) string {
+	var fields []string
+	for _, p := range op.pathParams {
+		fields = append(fields, fmt.Sprintf("%s: %s;", p.name, tsType(p.typ)))
 	}
-	for _, name := range op.pathParams {
-		fmt.Fprintf(&b, "  params.%s (path, required)\n", name)
-	}
-	for _, q := range op.queryParams {
-		req := "optional"
-		if q.required {
-			req = "required"
+	for _, p := range op.queryParams {
+		opt := ""
+		if !p.required {
+			opt = "?"
 		}
-		fmt.Fprintf(&b, "  params.%s (query, %s, %s)\n", q.name, req, q.typ)
+		fields = append(fields, fmt.Sprintf("%s%s: %s;", p.name, opt, tsType(p.typ)))
 	}
+	bodyRequired := op.hasBody && op.bodyRequired
 	if op.hasBody {
-		req := "optional"
+		opt := "?"
 		if op.bodyRequired {
-			req = "required"
+			opt = ""
 		}
-		fmt.Fprintf(&b, "  params.body (%s) — request body, JSON-serialized\n", req)
+		fields = append(fields, fmt.Sprintf("body%s: any; // JSON-serialized request body", opt))
 	}
+
+	paramsType := "{}"
+	if len(fields) > 0 {
+		paramsType = "{ " + strings.Join(fields, " ") + " }"
+	}
+	// params itself is only optional when nothing inside it is required.
+	paramsOptional := len(op.pathParams) == 0 && !bodyRequired
+	for _, p := range op.queryParams {
+		if p.required {
+			paramsOptional = false
+		}
+	}
+	paramsMark := ""
+	if paramsOptional {
+		paramsMark = "?"
+	}
+
+	var b strings.Builder
+	summary := op.summary
+	if summary == "" {
+		summary = fmt.Sprintf("%s %s", op.method, op.path)
+	}
+	fmt.Fprintf(&b, "/** %s */\n", summary)
+	fmt.Fprintf(&b, "declare function %s(params%s: %s): %s;\n", op.funcName, paramsMark, paramsType, responseTypeJS)
 	return b.String()
+}
+
+// tsType maps an OpenAPI schema type name to its TypeScript
+// equivalent, for display in the generated declarations only — there
+// is no runtime validation behind it. "array"/"object" degrade to
+// any[]/any rather than describing item/property shapes: OpenAPIPack
+// generates a flat call surface, not a full type-generator.
+func tsType(oaType string) string {
+	switch oaType {
+	case "integer", "number":
+		return "number"
+	case "boolean":
+		return "boolean"
+	case "array":
+		return "any[]"
+	case "object":
+		return "any"
+	case "string":
+		return "string"
+	default:
+		return "any"
+	}
 }
 
 var pathParamRe = regexp.MustCompile(`\{([^}]+)\}`)
