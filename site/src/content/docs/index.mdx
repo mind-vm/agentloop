@@ -122,6 +122,12 @@ kept verbatim — and large data never appears in the context window twice.
     call. `DefaultPolicy` denies side effects and blocks private-network
     fetches; `AllowAll` is the explicit fail-open escape hatch.
   </Card>
+  <Card title="Trace it with your own OTel SDK" icon="magnifier">
+    `Config.TracerProvider` takes a standard `trace.TracerProvider` — a
+    no-op by default. Wire in an OTel SDK pointed at Jaeger (or anywhere
+    else) and every `Run` produces a span tree, with no other agentloop
+    dependency beyond the stable tracing API.
+  </Card>
 </CardGrid>
 
 [Extending agentloop →](/agentloop/extending/)

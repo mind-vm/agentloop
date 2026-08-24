@@ -10,6 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/jryannel/agentloop/llm"
 	"github.com/jryannel/agentloop/sandbox"
 )
@@ -72,6 +76,15 @@ type Config struct {
 
 	// Now is a clock seam for tests. Nil uses time.Now.
 	Now func() time.Time
+
+	// TracerProvider produces spans for each Run — one root span per
+	// call plus child spans for sandbox build, each turn, its LLM call,
+	// and its JS execution. Optional; nil installs a no-op tracer, so
+	// leaving this unset costs a few allocations and produces no spans.
+	// Wire in an OTel SDK TracerProvider (e.g. configured with an OTLP
+	// exporter pointed at a Jaeger collector) to observe Run calls in
+	// production — nothing else in this package needs to change.
+	TracerProvider trace.TracerProvider
 }
 
 // SandboxBuilder produces the sandbox for one Run. The loop calls it
@@ -84,7 +97,8 @@ type SandboxBuilder interface {
 
 // loop is the default Loop implementation.
 type loop struct {
-	cfg Config
+	cfg    Config
+	tracer trace.Tracer
 }
 
 // New constructs the default Loop from Config. Required fields: LLM,
@@ -119,14 +133,31 @@ func New(cfg Config) Loop {
 		cfg.Policy = sandbox.DefaultPolicy{}
 		slog.Info("agentloop: no PolicyChecker configured — installing conservative sandbox.DefaultPolicy")
 	}
-	return &loop{cfg: cfg}
+	return &loop{cfg: cfg, tracer: resolveTracer(cfg.TracerProvider)}
 }
 
 // Run drives the reasoning loop for one user message. See the package
 // doc for the protocol.
-func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
+func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err error) {
 	ctx, cancel := context.WithTimeout(ctx, l.cfg.RunTimeout)
 	defer cancel()
+
+	ctx, span := l.tracer.Start(ctx, spanRun, trace.WithAttributes(
+		attribute.String(attrSessionID, req.SessionID),
+	))
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.SetAttributes(
+			attribute.String(attrStatus, result.Status),
+			attribute.Int(attrSteps, result.Steps),
+			attribute.Int64(attrPromptTok, int64(result.Tokens.Prompt)),
+			attribute.Int64(attrCompleteTok, int64(result.Tokens.Completion)),
+		)
+		span.End()
+	}()
 
 	runStart := l.cfg.Now()
 	usage := &runTokenUsage{}
@@ -193,7 +224,8 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		}
 	}
 
-	sb, cleanup, err := l.cfg.SandboxBuilder.Build(ctx, sess, req.Scope, func(evt sandbox.Event) {
+	buildCtx, buildSpan := l.tracer.Start(ctx, spanSandboxBuild)
+	sb, cleanup, err := l.cfg.SandboxBuilder.Build(buildCtx, sess, req.Scope, func(evt sandbox.Event) {
 		emit(req.OnEvent, RunEvent{
 			Type:    "sandbox_event",
 			Content: evt.Summary,
@@ -206,6 +238,11 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			},
 		})
 	})
+	if err != nil {
+		buildSpan.RecordError(err)
+		buildSpan.SetStatus(codes.Error, err.Error())
+	}
+	buildSpan.End()
 	if err != nil {
 		return finalize("error"), fmt.Errorf("agentloop: build sandbox: %w", err)
 	}
@@ -238,12 +275,22 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	prevArgs := json.RawMessage("{}")
 	emptyRetries := 0
 
-	for iter := 0; iter < l.cfg.MaxIterations; iter++ {
-		if ctx.Err() != nil {
-			emit(req.OnEvent, RunEvent{Type: "error", Content: "context cancelled: " + ctx.Err().Error()})
-			result := finalize("error")
-			return result, ctx.Err()
-		}
+	// runTurn is one LLM round-trip plus its optional JS execution,
+	// pulled out of the loop below so its turn span (opened first thing,
+	// closed via defer on every exit) can wrap the whole thing. done
+	// means Run should return (res, turnErr) now; done == false means
+	// keep looping — res and turnErr are meaningless in that case.
+	runTurn := func(iter int) (res RunResult, turnErr error, done bool) {
+		tctx, turnSpan := l.tracer.Start(ctx, spanTurn, trace.WithAttributes(
+			attribute.Int(attrIteration, iter),
+		))
+		defer func() {
+			if turnErr != nil {
+				turnSpan.RecordError(turnErr)
+				turnSpan.SetStatus(codes.Error, turnErr.Error())
+			}
+			turnSpan.End()
+		}()
 
 		streamer := newResponseStreamer(req.OnEvent)
 		// Elide stale run() bodies: their effect already lives in `args`
@@ -267,7 +314,21 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			Messages: messages,
 			Model:    model,
 		}
-		resp, err := l.cfg.LLM.Stream(ctx, llmReq, streamer.onChunk)
+
+		llmCtx, llmSpan := l.tracer.Start(tctx, spanLLMCall, trace.WithAttributes(
+			attribute.String(attrModel, model),
+		))
+		resp, err := l.cfg.LLM.Stream(llmCtx, llmReq, streamer.onChunk)
+		if err != nil {
+			llmSpan.RecordError(err)
+			llmSpan.SetStatus(codes.Error, err.Error())
+		} else {
+			llmSpan.SetAttributes(
+				attribute.Int64(attrPromptTok, int64(resp.InputTokens)),
+				attribute.Int64(attrCompleteTok, int64(resp.OutputTokens)),
+			)
+		}
+		llmSpan.End()
 		if err != nil {
 			writeStep(RunStep{
 				StepType: "error",
@@ -275,7 +336,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				ToolArgs: json.RawMessage(`{}`),
 			})
 			emit(req.OnEvent, RunEvent{Type: "error", Content: err.Error()})
-			return finalize("error"), fmt.Errorf("agentloop: llm: %w", err)
+			return finalize("error"), fmt.Errorf("agentloop: llm: %w", err), true
 		}
 		usage.prompt.Add(int32(resp.InputTokens))
 		usage.completion.Add(int32(resp.OutputTokens))
@@ -294,7 +355,8 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			if emptyRetries < maxEmptyRetries {
 				emptyRetries++
 				emit(req.OnEvent, RunEvent{Type: "warning", Content: "empty model turn, retrying"})
-				continue
+				turnSpan.AddEvent("empty model turn, retrying")
+				return RunResult{}, nil, false
 			}
 			writeStep(RunStep{
 				StepType: "error",
@@ -302,7 +364,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				ToolArgs: json.RawMessage(`{}`),
 			})
 			emit(req.OnEvent, RunEvent{Type: "error", Content: ErrEmptyResponse.Error()})
-			return finalize("error"), ErrEmptyResponse
+			return finalize("error"), ErrEmptyResponse, true
 		}
 
 		// Legacy terminator: a "DONE" marker = final answer. answer()
@@ -311,7 +373,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		// the old marker. Checked before JS extraction so an accidental
 		// ```javascript inside the final answer doesn't loop.
 		if done, final := ExtractDoneMarker(replyText); done {
-			return l.respond(req, writeStep, finalize, usage, final), nil
+			return l.respond(req, writeStep, finalize, usage, final), nil, true
 		}
 
 		jsCode := ExtractJSBlock(replyText)
@@ -319,7 +381,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			// Model answered directly without a fence or a DONE marker.
 			// Treat the whole reply as the final response rather than
 			// looping pointlessly.
-			return l.respond(req, writeStep, finalize, usage, replyText), nil
+			return l.respond(req, writeStep, finalize, usage, replyText), nil, true
 		}
 
 		// Run the JS. Persist before AND after so the trace shows the
@@ -335,7 +397,13 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		var resultContent string
 		var persistBlob json.RawMessage
 
+		_, jsSpan := l.tracer.Start(tctx, spanExecuteJS)
 		logs, ret, execErr := sb.ExecuteTurn(jsCode, prevArgs)
+		if execErr != nil {
+			jsSpan.RecordError(execErr)
+			jsSpan.SetStatus(codes.Error, execErr.Error())
+		}
+		jsSpan.End()
 		resultContent = logs
 		if execErr != nil {
 			// A failing turn must NOT destroy the carry — preserve
@@ -345,6 +413,9 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			// pattern is recognised, given a concrete retry hint — both
 			// aimed at breaking the "model repeats the same mistake"
 			// attractor rather than reasoning from a raw Go error string.
+			// This does NOT end the turn — the model gets to see the error
+			// and retry next iteration — so it's recorded on jsSpan above,
+			// not returned as turnErr here.
 			clean := sanitizeErrorForModel(execErr.Error())
 			resultContent = "Error: " + clean
 			if hint := retryHintForError(clean); hint != "" {
@@ -403,15 +474,28 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				Tokens:  &CallTokens{Prompt: callPrompt, Completion: callCompletion},
 			})
 			usage.lastFinal = final
-			result := finalize("completed")
-			l.emitDone(req, result)
-			return result, nil
+			out := finalize("completed")
+			l.emitDone(req, out)
+			return out, nil, true
 		}
 
 		history = append(history,
 			llm.Message{Role: "assistant", Content: replyText},
 			llm.Message{Role: "user", Content: userTurnContent},
 		)
+		return RunResult{}, nil, false
+	}
+
+	for iter := 0; iter < l.cfg.MaxIterations; iter++ {
+		if ctx.Err() != nil {
+			emit(req.OnEvent, RunEvent{Type: "error", Content: "context cancelled: " + ctx.Err().Error()})
+			res := finalize("error")
+			return res, ctx.Err()
+		}
+
+		if res, turnErr, done := runTurn(iter); done {
+			return res, turnErr
+		}
 	}
 
 	errMsg := fmt.Sprintf("agent exceeded max iterations (%d) without emitting DONE", l.cfg.MaxIterations)

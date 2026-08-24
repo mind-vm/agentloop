@@ -1,13 +1,13 @@
 ---
 title: Extending agentloop
-description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, and session-scoped sandbox reuse — the seams agentloop is designed to be extended through.
+description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, session-scoped sandbox reuse, and distributed tracing — the seams agentloop is designed to be extended through.
 sidebar:
   order: 1
 ---
 
 agentloop ships a minimal default (`DefaultCapabilities`,
 `DefaultSandboxBuilder`, `agentloopmem`'s in-memory stores,
-`sandbox.DefaultPolicy`) that's enough to run the quickstart, and six seams
+`sandbox.DefaultPolicy`) that's enough to run the quickstart, and seven seams
 meant to be replaced for a real application.
 
 ## Custom capabilities
@@ -165,6 +165,51 @@ builder never had to worry about:
 `pool.SandboxPool` also exposes `Evict(sessionID)` for an application-level
 session end (logout), and `EvictIdle()` to drive eviction on your own
 schedule instead of (or in addition to) the built-in background reaper.
+
+## Distributed tracing (OpenTelemetry)
+
+`Config.TracerProvider` takes a [`trace.TracerProvider`](https://pkg.go.dev/go.opentelemetry.io/otel/trace#TracerProvider).
+Left unset, `Run` produces no spans — `resolveTracer` installs a no-op
+tracer, so tracing costs a few allocations and nothing else until you wire
+one in:
+
+```go
+loop := agentloop.New(agentloop.Config{
+    // ...
+    TracerProvider: myOTelSDKTracerProvider, // e.g. wired to an OTLP/Jaeger exporter
+})
+```
+
+Only `go.opentelemetry.io/otel/trace` — the stable, SDK-free API package —
+is an agentloop dependency. The SDK, exporter, and Jaeger (or Zipkin, or
+whatever backend) wiring are entirely the application's to choose; agentloop
+never imports `go.opentelemetry.io/otel/sdk` itself.
+
+Every `Run` produces this span tree:
+
+```
+agentloop.run                    (one per Run call)
+├── agentloop.sandbox_build      (SandboxBuilder.Build)
+├── agentloop.turn                (one per LLM round-trip)
+│   ├── agentloop.llm_call        (the Stream call)
+│   └── agentloop.execute_js      (only when the model emitted JS this turn)
+├── agentloop.turn
+│   └── agentloop.llm_call
+└── ...
+```
+
+`agentloop.run` carries `agentloop.session_id`, and on completion
+`agentloop.status`, `agentloop.steps`, and aggregate token-count attributes.
+`agentloop.turn` carries the iteration index; `agentloop.llm_call` carries
+the model name and, on success, per-call token counts. Following OTel
+convention, a span's status is only ever set to `Error` (with the error
+recorded) on failure — a successful span is left `Unset`, not explicitly
+marked `Ok`.
+
+A JS execution error (the model's script threw) is recorded on
+`agentloop.execute_js` alone, not on the enclosing `agentloop.turn` — the
+turn itself didn't fail, it fed the error back to the model and kept going,
+so only the span for the operation that actually errored is marked.
 
 ## Next
 

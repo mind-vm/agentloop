@@ -147,6 +147,25 @@ export OPENAI_CHAT_MODEL=google/gemini-2.5-flash
   flight blocks until the first releases the sandbox, rather than
   racing on it. See the `pool` package doc comment for both mechanisms
   in detail.
+- **Distributed tracing (OpenTelemetry)** — `Config.TracerProvider`
+  takes a [`trace.TracerProvider`](https://pkg.go.dev/go.opentelemetry.io/otel/trace#TracerProvider).
+  Left unset, `Run` produces no spans (a no-op tracer, a few allocations
+  and nothing else); set it to an OTel SDK `TracerProvider` — e.g.
+  configured with an OTLP exporter pointed at a Jaeger collector — and
+  every `Run` produces a span tree: one root `agentloop.run` span, with
+  `agentloop.sandbox_build` and one `agentloop.turn` per LLM round-trip
+  as children, each turn's own `agentloop.llm_call` and (when the model
+  emits JS) `agentloop.execute_js` nested under it. Only
+  `go.opentelemetry.io/otel/trace` (the stable, SDK-free API package) is
+  an agentloop dependency — the SDK, exporter, and Jaeger wiring are
+  entirely the application's to choose:
+
+  ```go
+  loop := agentloop.New(agentloop.Config{
+      // ...
+      TracerProvider: myOTelSDKTracerProvider, // e.g. wired to an OTLP/Jaeger exporter
+  })
+  ```
 
 A capability whose `Build` fails is logged and skipped (a `warning`
 sandbox event, not an aborted session) — one flaky capability shouldn't
