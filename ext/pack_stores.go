@@ -5,7 +5,7 @@ import (
 
 	"github.com/dop251/goja"
 
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // StoreDoc is one indexed document surfaced to the sandbox by the

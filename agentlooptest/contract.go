@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jryannel/agentloop"
+	"github.com/mind-vm/agentloop"
 )
 
 // StepStoreHarness configures the StepStoreContract for a particular

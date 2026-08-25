@@ -3,8 +3,8 @@ package ext_test
 import (
 	"testing"
 
-	"github.com/jryannel/agentloop/ext"
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop/ext"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // --- documentSearch ---

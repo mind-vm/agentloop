@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/jryannel/agentloop/llm"
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop/llm"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // DefaultCapabilities is the general-purpose bundle most agents want:

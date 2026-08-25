@@ -9,9 +9,9 @@ import (
 
 	"github.com/dop251/goja"
 
-	"github.com/jryannel/agentloop"
-	"github.com/jryannel/agentloop/pool"
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop"
+	"github.com/mind-vm/agentloop/pool"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // fakeBuilder is an agentloop.SandboxBuilder that counts Build calls and

@@ -6,12 +6,12 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
-	"github.com/jryannel/agentloop/redact"
+	"github.com/mind-vm/agentloop/redact"
 )
 
 // instrumentationName identifies this package as the span source, per
 // OTel convention (Tracer's first argument).
-const instrumentationName = "github.com/jryannel/agentloop"
+const instrumentationName = "github.com/mind-vm/agentloop"
 
 // Span names. One per stage Run breaks into — see run.go for where each
 // is opened. agentloop.run is the root; the rest are its children (plus
@@ -35,7 +35,7 @@ const (
 	attrCompleteTok = "agentloop.tokens.completion"
 )
 
-// resolveTracer returns tp's "github.com/jryannel/agentloop" Tracer, or a
+// resolveTracer returns tp's "github.com/mind-vm/agentloop" Tracer, or a
 // no-op Tracer when tp is nil. Called once in New — this is the only
 // place a nil TracerProvider is handled; everywhere else in this package
 // just calls l.tracer.Start, exactly as it would against a real one.

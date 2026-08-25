@@ -14,9 +14,9 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/jryannel/agentloop/llm"
-	"github.com/jryannel/agentloop/redact"
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop/llm"
+	"github.com/mind-vm/agentloop/redact"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // MaxIterations is the default cap on LLM round-trips a single Run will

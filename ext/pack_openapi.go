@@ -8,7 +8,7 @@ import (
 	"github.com/dop251/goja"
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // OpenAPIConfig configures OpenAPIPack.

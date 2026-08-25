@@ -8,8 +8,8 @@ import (
 
 	"github.com/dop251/goja"
 
-	"github.com/jryannel/agentloop"
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // TestDefaultSandboxBuilder_RegistersCapabilityPacks confirms

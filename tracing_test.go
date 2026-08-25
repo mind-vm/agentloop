@@ -10,8 +10,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/jryannel/agentloop"
-	"github.com/jryannel/agentloop/llm"
+	"github.com/mind-vm/agentloop"
+	"github.com/mind-vm/agentloop/llm"
 )
 
 // newRecordingTracerProvider builds a real (non-noop) TracerProvider

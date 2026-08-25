@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jryannel/agentloop"
-	"github.com/jryannel/agentloop/llm"
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop"
+	"github.com/mind-vm/agentloop/llm"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // TestRun_MaxIterationsConfigurable verifies Config.MaxIterations

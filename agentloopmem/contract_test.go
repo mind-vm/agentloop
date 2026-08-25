@@ -3,9 +3,9 @@ package agentloopmem_test
 import (
 	"testing"
 
-	"github.com/jryannel/agentloop"
-	"github.com/jryannel/agentloop/agentloopmem"
-	"github.com/jryannel/agentloop/agentlooptest"
+	"github.com/mind-vm/agentloop"
+	"github.com/mind-vm/agentloop/agentloopmem"
+	"github.com/mind-vm/agentloop/agentlooptest"
 )
 
 // TestStepStore_Contract runs the shared StepStore conformance harness

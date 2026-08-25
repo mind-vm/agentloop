@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jryannel/agentloop/ext"
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop/ext"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // TestSecretPack_ReturnsValue confirms the bare global secret(name)

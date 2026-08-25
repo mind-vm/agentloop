@@ -8,11 +8,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jryannel/agentloop"
-	"github.com/jryannel/agentloop/eval"
-	"github.com/jryannel/agentloop/evalmem"
-	"github.com/jryannel/agentloop/llm"
-	"github.com/jryannel/agentloop/redact"
+	"github.com/mind-vm/agentloop"
+	"github.com/mind-vm/agentloop/eval"
+	"github.com/mind-vm/agentloop/evalmem"
+	"github.com/mind-vm/agentloop/llm"
+	"github.com/mind-vm/agentloop/redact"
 )
 
 // fakeRunner is an agentloop.Loop whose response is scripted by

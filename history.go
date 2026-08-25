@@ -1,6 +1,6 @@
 package agentloop
 
-import "github.com/jryannel/agentloop/llm"
+import "github.com/mind-vm/agentloop/llm"
 
 // HistoryWindow is the default cap on how many prior steps the loop
 // replays into the LLM's context window (override via

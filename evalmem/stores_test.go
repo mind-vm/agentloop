@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jryannel/agentloop/eval"
-	"github.com/jryannel/agentloop/evalmem"
+	"github.com/mind-vm/agentloop/eval"
+	"github.com/mind-vm/agentloop/evalmem"
 )
 
 func TestInMemoryStore_SuiteCaseRunRoundTrip(t *testing.T) {

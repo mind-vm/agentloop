@@ -3,7 +3,7 @@ package agentloop
 import (
 	"testing"
 
-	"github.com/jryannel/agentloop/llm"
+	"github.com/mind-vm/agentloop/llm"
 )
 
 // TestElideStaleCode_PreservesPriorConversationVerbatim locks in a real

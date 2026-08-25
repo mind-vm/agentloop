@@ -9,7 +9,7 @@ import (
 
 	"github.com/dop251/goja"
 
-	"github.com/jryannel/agentloop/llm"
+	"github.com/mind-vm/agentloop/llm"
 )
 
 // codeFenceRe strips an optional wrapping code fence from an LLM

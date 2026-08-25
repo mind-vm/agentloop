@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jryannel/agentloop"
-	"github.com/jryannel/agentloop/agentloopmem"
+	"github.com/mind-vm/agentloop"
+	"github.com/mind-vm/agentloop/agentloopmem"
 )
 
 func TestSessionStore_PutGet(t *testing.T) {

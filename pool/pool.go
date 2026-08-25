@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jryannel/agentloop"
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // Options configures a SandboxPool. The zero value is a usable default.

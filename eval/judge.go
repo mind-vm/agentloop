@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jryannel/agentloop/llm"
+	"github.com/mind-vm/agentloop/llm"
 )
 
 // judgeResponse asks the judge to rate response on a 0-10 integer

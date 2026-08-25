@@ -3,7 +3,7 @@ package agentloop
 import (
 	"context"
 
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // Capability is the seam between the loop and application-supplied

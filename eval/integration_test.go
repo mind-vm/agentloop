@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jryannel/agentloop"
-	"github.com/jryannel/agentloop/agentloopmem"
-	"github.com/jryannel/agentloop/eval"
-	"github.com/jryannel/agentloop/evalmem"
-	"github.com/jryannel/agentloop/llm"
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop"
+	"github.com/mind-vm/agentloop/agentloopmem"
+	"github.com/mind-vm/agentloop/eval"
+	"github.com/mind-vm/agentloop/evalmem"
+	"github.com/mind-vm/agentloop/llm"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 // scriptedLLM is a minimal llm.Client used by both the agent loop

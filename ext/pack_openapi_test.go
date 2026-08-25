@@ -11,8 +11,8 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/jryannel/agentloop/ext"
-	"github.com/jryannel/agentloop/sandbox"
+	"github.com/mind-vm/agentloop/ext"
+	"github.com/mind-vm/agentloop/sandbox"
 )
 
 const petStoreSpec = `{
