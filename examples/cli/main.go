@@ -20,6 +20,7 @@ import (
 	"github.com/mind-vm/agentloop"
 	"github.com/mind-vm/agentloop/agentloopmem"
 	"github.com/mind-vm/agentloop/llm"
+	"github.com/mind-vm/agentloop/projectctx"
 )
 
 func main() {
@@ -35,6 +36,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Project instructions (AGENTS.md) are a layered capability: the
+	// loop knows nothing about them. The chat surface discovers them and
+	// passes the rendered section as this run's Context. A partial load
+	// is worth a warning, not an exit — the docs that did read are still
+	// returned alongside the error.
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "agentloop: "+err.Error())
+		os.Exit(1)
+	}
+	docs, err := projectctx.Load(cwd)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[warning] "+err.Error())
+	}
+
 	caps := agentloop.DefaultCapabilities(client, "")
 	l := agentloop.New(agentloop.Config{
 		LLM:            client,
@@ -47,6 +63,7 @@ func main() {
 		SessionID: "cli-session",
 		Scope:     agentloop.Scope{WorkspaceID: "local"},
 		Message:   message,
+		Context:   projectctx.Render(docs),
 		OnEvent:   printEvent,
 	})
 	if err != nil {

@@ -52,6 +52,10 @@ is kept verbatim) and large data never appears in the context window twice.
   `goja.New()` + pack-registration cost on every message. Wraps any
   other `SandboxBuilder`; see [Extending](#extending) for the
   correctness issue it has to solve to do that safely.
+- **`projectctx`** — discovers project instruction files (`AGENTS.md`)
+  from a checkout on disk and renders them into a prompt section. A
+  layered capability: nothing in the core imports it, and an application
+  opts in by passing `projectctx.Render(docs)` as `RunRequest.Context`.
 - **`eval`** — an LLM-judged eval harness: a `Suite` of `Case`s (input +
   judge criteria), each dispatched through an `agentloop.Loop` and
   scored 0–10 by a judge `llm.Client`. `agentloop.Loop` and
@@ -144,6 +148,19 @@ A failed request is retried up to three times by default — set
   persisted; `Trigger` is the knob for how often you pay it. Compaction
   is best-effort — a failure emits a `warning` event and the run
   proceeds on the uncompacted history.
+- **Project instructions** — `projectctx.Load(cwd)` walks from the
+  repository root down to `cwd` collecting `AGENTS.md` files (general
+  first, most specific last), and `projectctx.Render(docs)` turns them
+  into a `## Project instructions` section to pass as
+  `RunRequest.Context` — see `examples/cli`. Repository files must
+  resolve inside the root even after symlinks and are read through an
+  `os.Root`, so a symlinked `AGENTS.md` can't pull in a file from
+  outside the project. `Load` returns any docs that read cleanly
+  *alongside* its error, so one unreadable file warns rather than
+  denying the run its remaining context. Unlike the CLI convention this
+  came from, no user-global file is read unless you ask for one
+  (`Loader{GlobalDir: ...}`) — a library shouldn't reach into `$HOME` on
+  its own.
 - **Policy** — implement `sandbox.PolicyChecker` to gate side-effecting
   primitives (`fetch`, `ai`, or your own) per call. `sandbox.DefaultPolicy`
   is a conservative default (deny side effects, block private-network
