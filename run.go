@@ -73,7 +73,24 @@ type Config struct {
 
 	// HistoryWindow caps how many prior steps are rehydrated into the
 	// LLM context. Zero uses the package default.
+	//
+	// With a Compactor configured this becomes how much of the past the
+	// loop CONSIDERS rather than how much it sends: everything loaded
+	// is handed to the Compactor, which decides what survives verbatim.
+	// Raising it is how a session gets long-term memory — the prompt
+	// stays bounded by the compactor, not by this.
 	HistoryWindow int
+
+	// Compactor folds the older part of a long session's history into a
+	// summary before the run's turns begin, so early context survives
+	// in compressed form instead of falling off the end of
+	// HistoryWindow unnoticed.
+	//
+	// Optional; nil keeps the default behaviour — history is truncated
+	// to HistoryWindow and the overflow is simply gone. Compaction is
+	// best-effort: a Compactor that fails warns and the run proceeds on
+	// the uncompacted history.
+	Compactor Compactor
 
 	// Now is a clock seam for tests. Nil uses time.Now.
 	Now func() time.Time
@@ -290,6 +307,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 	}
 
 	history := rehydrateHistory(priorSteps, l.cfg.HistoryWindow)
+	history = l.compactHistory(ctx, req, usage, history)
 	history = append(history, llm.Message{Role: "user", Content: req.Message})
 	// baseLen marks the end of the prior conversation, before this Run
 	// appends anything of its own — elideStaleCode uses it so eliding
@@ -472,7 +490,7 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 			prevArgs = ret // thread full-fidelity return into next turn's args
 			persistBlob = ret
 		}
-		userTurnContent := "Execution result:\n" + resultContent
+		userTurnContent := executionResultPrefix + "\n" + resultContent
 
 		callPrompt := usage.lastPrompt.Load()
 		callCompletion := usage.lastCompletion.Load()
@@ -633,4 +651,54 @@ func redactEvent(r *redact.Redactor, evt RunEvent) RunEvent {
 		}
 	}
 	return evt
+}
+
+// compactHistory hands the rehydrated history to Config.Compactor,
+// returning what the run should actually send.
+//
+// Compaction is best-effort in both directions. A failure warns and
+// returns the history untouched rather than denying the run its turn —
+// a larger prompt beats no answer — and a Compactor that returns
+// nothing is treated the same way, since dropping the conversation
+// silently is the one outcome worse than not compacting.
+//
+// The compactor's own token spend is folded into the run's usage on
+// every path, including the error path: a provider call that produced
+// an unusable summary still cost what it cost, and a Run whose reported
+// usage omitted it would understate the session.
+func (l *loop) compactHistory(ctx context.Context, req RunRequest, usage *runTokenUsage, history []llm.Message) []llm.Message {
+	if l.cfg.Compactor == nil {
+		return history
+	}
+	ctx, span := l.tracer.Start(ctx, spanCompact)
+	defer span.End()
+
+	before := len(history)
+	res, err := l.cfg.Compactor.Compact(ctx, history)
+	usage.prompt.Add(res.Tokens.Prompt)
+	usage.completion.Add(res.Tokens.Completion)
+	if err != nil {
+		rerr := redactErr(l.cfg.Redactor, err)
+		span.RecordError(rerr)
+		span.SetStatus(codes.Error, rerr.Error())
+		l.emit(req.OnEvent, RunEvent{Type: "warning", Content: "history compaction failed: " + err.Error()})
+		return history
+	}
+	if len(res.Messages) == 0 && before > 0 {
+		l.emit(req.OnEvent, RunEvent{Type: "warning", Content: "history compaction returned nothing; keeping history"})
+		return history
+	}
+
+	after := len(res.Messages)
+	span.SetAttributes(
+		attribute.Int(attrCompactBefore, before),
+		attribute.Int(attrCompactAfter, after),
+	)
+	if after < before {
+		l.emit(req.OnEvent, RunEvent{
+			Type: "compacted",
+			Args: map[string]any{"messages_before": before, "messages_after": after},
+		})
+	}
+	return res.Messages
 }

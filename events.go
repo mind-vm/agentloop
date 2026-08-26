@@ -11,6 +11,8 @@ package agentloop
 //	sandbox_event     a primitive emitted observability; Args carries
 //	                  the underlying sandbox.Event fields
 //	data_update       the agent's carried data changed; Args = new value
+//	compacted         history was summarized before the run's turns;
+//	                  Args = {"messages_before", "messages_after"}
 //	response          final markdown answer; Content = the answer
 //	response_chunk    streamed token from a final-text turn;
 //	                  Content = the chunk (no Args)

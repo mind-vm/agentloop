@@ -130,6 +130,20 @@ A failed request is retried up to three times by default — set
   `agentloopmem` ships in-memory implementations to start from, and
   `agentlooptest.StepStoreContract` is a conformance harness to run
   against your own implementation as an acceptance gate.
+- **History compaction** — by default a session's history is truncated
+  to `Config.HistoryWindow` steps and the overflow is gone. Set
+  `Config.Compactor` to fold that older stretch into a summary instead.
+  `agentloop.SummarizingCompactor` is the batteries-included
+  implementation: past `Trigger` messages it summarizes everything
+  except the most recent `Keep` via an `llm.Client` (point it at a small,
+  cheap model), and it never splits a `run()` block from the execution
+  result it produced. Raising `HistoryWindow` alongside it is how a
+  session gets long-term memory — the prompt stays bounded by the
+  compactor rather than by the window. The cost is one extra provider
+  call per `Run` once a session passes `Trigger`, since compaction isn't
+  persisted; `Trigger` is the knob for how often you pay it. Compaction
+  is best-effort — a failure emits a `warning` event and the run
+  proceeds on the uncompacted history.
 - **Policy** — implement `sandbox.PolicyChecker` to gate side-effecting
   primitives (`fetch`, `ai`, or your own) per call. `sandbox.DefaultPolicy`
   is a conservative default (deny side effects, block private-network

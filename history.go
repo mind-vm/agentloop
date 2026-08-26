@@ -52,7 +52,7 @@ func stepToTurn(step RunStep) (role, text string, ok bool) {
 	case "execute_js":
 		return "assistant", "```javascript\n" + step.Content + "\n```", true
 	case "execute_js_result":
-		return "user", "Execution result:\n" + step.Content, true
+		return "user", executionResultPrefix + "\n" + step.Content, true
 	default:
 		return "", "", false
 	}

@@ -18,6 +18,7 @@ const instrumentationName = "github.com/mind-vm/agentloop"
 // agentloop.llm_call and agentloop.execute_js nest under agentloop.turn).
 const (
 	spanRun          = "agentloop.run"
+	spanCompact      = "agentloop.compact"
 	spanSandboxBuild = "agentloop.sandbox_build"
 	spanTurn         = "agentloop.turn"
 	spanLLMCall      = "agentloop.llm_call"
@@ -33,6 +34,9 @@ const (
 	attrModel       = "agentloop.model"
 	attrPromptTok   = "agentloop.tokens.prompt"
 	attrCompleteTok = "agentloop.tokens.completion"
+
+	attrCompactBefore = "agentloop.compact.messages_before"
+	attrCompactAfter  = "agentloop.compact.messages_after"
 )
 
 // resolveTracer returns tp's "github.com/mind-vm/agentloop" Tracer, or a
