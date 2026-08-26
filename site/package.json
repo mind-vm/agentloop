@@ -1,0 +1,16 @@
+{
+  "name": "agentloop-site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.4",
+    "astro": "^7.1.4"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  }
+}

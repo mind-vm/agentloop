@@ -315,4 +315,4 @@ enforcement) to add on top if/when you need them.
 
 ## License
 
-Proprietary — all rights reserved. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

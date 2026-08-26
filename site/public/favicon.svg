@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="agentloop">
+  <title>agentloop</title>
+  <!-- A loop arrow around a code prompt: the return value threading back into
+       the next turn, and the JS the model writes to produce it. Colours are
+       fixed rather than inherited so the icon reads the same regardless of
+       browser chrome theme. -->
+  <rect width="32" height="32" rx="7" fill="#1e1b4b" />
+  <path
+    d="M9 12a7 7 0 0 1 13-3.2"
+    fill="none"
+    stroke="#a5b4fc"
+    stroke-width="2.4"
+    stroke-linecap="round"
+  />
+  <path d="M22 5.5l1.6 4.4-4.6-1z" fill="#a5b4fc" />
+  <path
+    d="M23 20a7 7 0 0 1-13 3.2"
+    fill="none"
+    stroke="#34d399"
+    stroke-width="2.4"
+    stroke-linecap="round"
+  />
+  <path d="M10 26.5l-1.6-4.4 4.6 1z" fill="#34d399" />
+</svg>
