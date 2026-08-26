@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,10 +35,25 @@ type Config struct {
 	Headers map[string]string
 	// HTTPClient is optional; nil falls back to a 5-minute-timeout client.
 	HTTPClient *http.Client
+
+	// MaxRetries caps how many extra attempts a /chat/completions
+	// request gets after its first one fails retryably — a transport
+	// error, a 429, or a 5xx. Zero uses the package default (3);
+	// negative disables retrying entirely.
+	//
+	// Retries happen before any of the response body is read, so a
+	// streaming call never replays deltas the caller already saw.
+	MaxRetries int
+
+	// RetryBaseDelay is the wait before the first retry; each further
+	// attempt doubles it, plus jitter, capped at 30s. A Retry-After
+	// header from the upstream overrides both. Zero uses the package
+	// default (500ms).
+	RetryBaseDelay time.Duration
 }
 
 // ConfigFromEnv reads OPENAI_API_KEY / OPENAI_CHAT_MODEL / OPENAI_BASE_URL /
-// OPENAI_REASONING_EFFORT.
+// OPENAI_REASONING_EFFORT / OPENAI_MAX_RETRIES.
 //
 //	OPENAI_API_KEY          — required to actually build a client.
 //	OPENAI_CHAT_MODEL       — default "gpt-4o-mini"; override to match
@@ -50,13 +66,26 @@ type Config struct {
 //	                          OpenAI-wire-compatible host.
 //	OPENAI_REASONING_EFFORT — optional ("low"|"medium"|"high"), caps
 //	                          thinking on reasoning models.
+//	OPENAI_MAX_RETRIES      — optional; retries after a failed attempt,
+//	                          default 3. "0" disables retrying. A value
+//	                          that isn't an integer is ignored.
 func ConfigFromEnv() Config {
-	return Config{
+	cfg := Config{
 		APIKey:          os.Getenv("OPENAI_API_KEY"),
 		ChatModel:       envOr("OPENAI_CHAT_MODEL", defaultChatModel),
 		BaseURL:         envOr("OPENAI_BASE_URL", defaultBaseURL),
 		ReasoningEffort: os.Getenv("OPENAI_REASONING_EFFORT"),
 	}
+	// "0" has to mean "no retries", but Config's zero value means
+	// "use the default" — so map an explicit 0 onto the negative
+	// disable sentinel.
+	if n, err := strconv.Atoi(os.Getenv("OPENAI_MAX_RETRIES")); err == nil {
+		if n <= 0 {
+			n = -1
+		}
+		cfg.MaxRetries = n
+	}
+	return cfg
 }
 
 func envOr(name, def string) string {
@@ -75,6 +104,8 @@ type openAIClient struct {
 	reasoningEffort string
 	headers         map[string]string
 	http            *http.Client
+	maxRetries      int
+	retryBaseDelay  time.Duration
 }
 
 // NewOpenAI builds a Client from cfg. Returns an error if APIKey is
@@ -88,6 +119,17 @@ func NewOpenAI(cfg Config) (Client, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 5 * time.Minute}
 	}
+	maxRetries := cfg.MaxRetries
+	switch {
+	case maxRetries == 0:
+		maxRetries = defaultMaxRetries
+	case maxRetries < 0:
+		maxRetries = 0
+	}
+	retryBaseDelay := cfg.RetryBaseDelay
+	if retryBaseDelay <= 0 {
+		retryBaseDelay = defaultRetryBaseDelay
+	}
 	return &openAIClient{
 		apiKey:          cfg.APIKey,
 		baseURL:         strings.TrimRight(orDefault(cfg.BaseURL, defaultBaseURL), "/"),
@@ -95,6 +137,8 @@ func NewOpenAI(cfg Config) (Client, error) {
 		reasoningEffort: cfg.ReasoningEffort,
 		headers:         cfg.Headers,
 		http:            hc,
+		maxRetries:      maxRetries,
+		retryBaseDelay:  retryBaseDelay,
 	}, nil
 }
 
@@ -159,8 +203,11 @@ func (c *openAIClient) Stream(ctx context.Context, req CompletionRequest, onChun
 	if err == nil {
 		return out, nil
 	}
+	// A retryable status (429) has already exhausted its retries inside
+	// doJSONPost — falling back to Complete would only spend the same
+	// budget again against a limit that is still closed.
 	var apiErr *apiError
-	if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
+	if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 && !isRetryableStatus(apiErr.StatusCode) {
 		full, cerr := c.Complete(ctx, req)
 		if cerr != nil {
 			return full, cerr
@@ -334,29 +381,61 @@ func (c *openAIClient) postChat(ctx context.Context, wire chatRequest) (*chatRes
 	return &parsed, nil
 }
 
+// doJSONPost issues the request and returns the still-unread response
+// body on success. Transport errors, 429s, and 5xx are retried with
+// exponential backoff plus jitter, honouring a Retry-After header when
+// the upstream sends one; every other status fails immediately, since
+// the server will reject the identical request the same way next time.
+//
+// Nothing is read from a successful body here, and a failed attempt's
+// body is drained and closed before the next one — so the streaming
+// caller downstream always receives a fresh, fully-unconsumed stream.
 func (c *openAIClient) doJSONPost(ctx context.Context, path string, body []byte) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("llm: request: %w", err)
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+		if err != nil {
+			// A malformed base URL fails identically on every attempt.
+			return nil, fmt.Errorf("llm: request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		if c.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		}
+		for k, v := range c.headers {
+			req.Header.Set(k, v)
+		}
+
+		hint := absentRetryAfter()
+		resp, err := c.http.Do(req)
+		switch {
+		case err != nil:
+			lastErr = fmt.Errorf("llm: do: %w", err)
+		case resp.StatusCode >= 200 && resp.StatusCode < 300:
+			return resp.Body, nil
+		default:
+			buf, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			hint = parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now())
+			lastErr = &apiError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(buf))}
+			if !isRetryableStatus(resp.StatusCode) {
+				return nil, lastErr
+			}
+		}
+
+		// A cancelled Run isn't a provider failure — report it as
+		// itself rather than as whatever the in-flight attempt returned.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if attempt >= c.maxRetries {
+			return nil, lastErr
+		}
+		if err := sleepCtx(ctx, retryDelay(c.retryBaseDelay, attempt, hint)); err != nil {
+			return nil, err
+		}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	for k, v := range c.headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("llm: do: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		buf, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		return nil, &apiError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(buf))}
-	}
-	return resp.Body, nil
 }
 
 var _ Client = (*openAIClient)(nil)

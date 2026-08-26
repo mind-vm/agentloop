@@ -27,7 +27,9 @@ is kept verbatim) and large data never appears in the context window twice.
   implementation that works with OpenAI itself, [OpenRouter](https://openrouter.ai),
   [EdenAI](https://edenai.co), Groq, together.ai, a local vLLM/Ollama
   server, or any other gateway that speaks the same `/chat/completions`
-  protocol.
+  protocol. Rate limits (429) and upstream failures (5xx) are retried
+  with exponential backoff plus jitter, honouring a `Retry-After` header
+  when the upstream sends one — see `Config.MaxRetries`.
 - **`agentloopmem`** — in-memory `SessionStore` / `StepStore` for local
   dev, one-shot CLIs, and eval suites. Not for production traffic (no
   durability, no cross-process visibility).
@@ -107,6 +109,10 @@ export OPENAI_CHAT_MODEL=openai/gpt-4o-mini
 export OPENAI_BASE_URL=https://api.edenai.run/v3
 export OPENAI_CHAT_MODEL=google/gemini-2.5-flash
 ```
+
+A failed request is retried up to three times by default — set
+`OPENAI_MAX_RETRIES` (or `llm.Config.MaxRetries`) to tune that, or to
+`0` to turn retrying off entirely.
 
 ## Extending
 
