@@ -7,5 +7,5 @@
 // `base` to "/" here and then fixing every link that hard-codes the old
 // prefix; there is no generator here to catch a stale one, so grep for
 // "/agentloop/" under src/content/docs after changing this.
-export const site = "https://jryannel.github.io";
+export const site = "https://mind-vm.github.io";
 export const base = "/agentloop";

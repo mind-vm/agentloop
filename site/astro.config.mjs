@@ -20,10 +20,10 @@ export default defineConfig({
         "A small Go engine for LLM agents that think by writing JavaScript " +
         "instead of calling named tools.",
       social: [
-        { icon: "github", label: "GitHub", href: "https://github.com/jryannel/agentloop" },
+        { icon: "github", label: "GitHub", href: "https://github.com/mind-vm/agentloop" },
       ],
       editLink: {
-        baseUrl: "https://github.com/jryannel/agentloop/edit/main/site/",
+        baseUrl: "https://github.com/mind-vm/agentloop/edit/main/site/",
       },
       // Four groups, in the order a reader meets them: why (Concepts), how to
       // get running (Start here), how to plug application-specific pieces in
@@ -47,12 +47,12 @@ export default defineConfig({
             { autogenerate: { directory: "reference" } },
             {
               label: "API reference (pkg.go.dev)",
-              link: "https://pkg.go.dev/github.com/jryannel/agentloop",
+              link: "https://pkg.go.dev/github.com/mind-vm/agentloop",
               attrs: { target: "_blank" },
             },
             {
               label: "Source on GitHub",
-              link: "https://github.com/jryannel/agentloop",
+              link: "https://github.com/mind-vm/agentloop",
               attrs: { target: "_blank" },
             },
           ],

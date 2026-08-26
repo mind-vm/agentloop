@@ -24,13 +24,13 @@ enforcement) to add on top if and when you need them.
 ## API reference
 
 The full API reference is the Go doc comments, on
-[pkg.go.dev](https://pkg.go.dev/github.com/jryannel/agentloop).
+[pkg.go.dev](https://pkg.go.dev/github.com/mind-vm/agentloop).
 
 ## Source
 
-[github.com/jryannel/agentloop](https://github.com/jryannel/agentloop)
+[github.com/mind-vm/agentloop](https://github.com/mind-vm/agentloop)
 
 ## License
 
-Proprietary — all rights reserved. See
-[LICENSE](https://github.com/jryannel/agentloop/blob/main/LICENSE).
+MIT — see
+[LICENSE](https://github.com/mind-vm/agentloop/blob/main/LICENSE).
