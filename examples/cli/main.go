@@ -21,6 +21,7 @@ import (
 	"github.com/mind-vm/agentloop/agentloopmem"
 	"github.com/mind-vm/agentloop/llm"
 	"github.com/mind-vm/agentloop/projectctx"
+	"github.com/mind-vm/agentloop/skills"
 )
 
 func main() {
@@ -51,7 +52,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "[warning] "+err.Error())
 	}
 
-	caps := agentloop.DefaultCapabilities(client, "")
+	// Skills are layered the same way, but reach the run as capabilities
+	// rather than as prompt text: each SKILL.md becomes one capability
+	// the model can find with skillList() and read with skillGet().
+	sk, err := skills.Load(cwd)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[warning] "+err.Error())
+	}
+
+	caps := append(agentloop.DefaultCapabilities(client, ""), skills.Capabilities(sk)...)
 	l := agentloop.New(agentloop.Config{
 		LLM:            client,
 		Sessions:       agentloopmem.NewSessionStore(nil),

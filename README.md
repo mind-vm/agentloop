@@ -56,6 +56,11 @@ is kept verbatim) and large data never appears in the context window twice.
   from a checkout on disk and renders them into a prompt section. A
   layered capability: nothing in the core imports it, and an application
   opts in by passing `projectctx.Render(docs)` as `RunRequest.Context`.
+- **`skills`** — discovers `SKILL.md` files in a project and turns each
+  into a `Capability` the model can find with `skillList()` and read with
+  `skillGet(name)`. Bodies stay out of the prompt until fetched, so a
+  project can carry many detailed skills at the cost of one catalog line
+  each.
 - **`eval`** — an LLM-judged eval harness: a `Suite` of `Case`s (input +
   judge criteria), each dispatched through an `agentloop.Loop` and
   scored 0–10 by a judge `llm.Client`. `agentloop.Loop` and
@@ -161,6 +166,18 @@ A failed request is retried up to three times by default — set
   came from, no user-global file is read unless you ask for one
   (`Loader{GlobalDir: ...}`) — a library shouldn't reach into `$HOME` on
   its own.
+- **Project skills** — `skills.Load(cwd)` reads
+  `<root>/.agentloop/skills/<name>/SKILL.md` (directory configurable) and
+  `skills.Capabilities(sk)` turns them into capabilities to append to
+  the slice a `DefaultSandboxBuilder` gets — see `examples/cli`. Each
+  skill contributes ONE line to the system prompt (name, description,
+  and how to fetch it); the instructions themselves arrive only when the
+  model calls `skillGet(name)`, which is what keeps a big skill library
+  cheap. One capability per skill, so
+  `DefaultSandboxBuilder.EnabledCapabilities` can switch a skill on per
+  session. Names that would shadow a built-in (`fetch`, `http`, `require`,
+  …) are rejected: pack help entries merge by name, so such a skill would
+  otherwise replace that primitive's own documentation.
 - **Policy** — implement `sandbox.PolicyChecker` to gate side-effecting
   primitives (`fetch`, `ai`, or your own) per call. `sandbox.DefaultPolicy`
   is a conservative default (deny side effects, block private-network

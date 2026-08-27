@@ -110,7 +110,11 @@ func (b *DefaultSandboxBuilder) Build(ctx context.Context, sess Session, scope S
 	// help() reads every pack's HelpEntries, so both go last.
 	skills := make([]sandbox.SkillInfo, 0, len(packs))
 	for _, p := range packs {
-		skills = append(skills, sandbox.SkillInfo{Name: p.Name, Description: p.Description, Type: "pack"})
+		kind := p.SkillType
+		if kind == "" {
+			kind = "pack"
+		}
+		skills = append(skills, sandbox.SkillInfo{Name: p.Name, Description: p.Description, Type: kind})
 	}
 	packs = append(packs, sandbox.SkillDiscoveryPack(skills), sandbox.HelpPack())
 

@@ -21,6 +21,14 @@ type Pack struct {
 	// system primitive.
 	Description string
 
+	// SkillType is what this pack reports as in skillList(), one of
+	// SkillInfo's documented kinds. Empty means "pack" — the right
+	// answer for anything that installs JS functions. A pack that
+	// exists only to carry documentation the model retrieves with
+	// skillGet(), such as one built from a SKILL.md file, should say
+	// "prompt" so the listing does not claim it brings primitives.
+	SkillType string
+
 	// Prompt is the detailed documentation inlined into the agent's
 	// system prompt — TypeScript-style `declare` lines work well
 	// because the model recognises the shape.
