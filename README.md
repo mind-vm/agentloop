@@ -47,7 +47,10 @@ is kept verbatim) and large data never appears in the context window twice.
 - **`ext`** — optional `sandbox.Pack`s that are generically useful but
   don't belong in the core sandbox package: `EmailPack` (`sendEmail`),
   `SecretPack` (`secret`), `SearchPack` (`documentSearch`), `StoresPack`
-  (`stores.list`/`stores.read`), and `OpenAPIPack`, which generates a
+  (`stores.list`/`stores.read`), `WorkspacePack` (`readFile`,
+  `writeFile`, `editFile`, `listDir`, `glob`, `grep` — confined to one
+  directory by `os.Root`, so `..` and symlinks cannot escape it), and
+  `OpenAPIPack`, which generates a
   `require()`-able skill — one JS function per operation — from an
   OpenAPI 3 document. Each takes a callback, small interface, or (for
   `OpenAPIPack`) a parsed spec, same decoupling the core packs use, so
@@ -183,13 +186,35 @@ else the platform's per-user application directory — `--db` overrides
 all three. `--ephemeral` runs against in-memory stores instead and
 writes nothing, for a turn that should leave no trace.
 
+### The workspace
+
+`--cwd` (default: the current directory) is the project the agent reads
+and edits. It gets `readFile`, `writeFile`, `editFile`, `listDir`,
+`glob`, and `grep`, all resolved through an `os.Root` handle — so `..`,
+an absolute path, and a symlink pointing outside are refused by the
+runtime rather than by path arithmetic that has to be got right. `.git`
+is never walked: not source, frequently enormous, and its config can
+hold credentials.
+
+Reads are ungated. Writes and edits are not: they are denied by the
+default policy and become a permission prompt naming the file. A read
+confined to the workspace cannot reach anything you did not point the
+agent at, while a prompt per file would train you to approve without
+reading — the mutations are where the consequence is.
+
+`editFile` requires its target text to appear exactly once, and refuses
+the edit otherwise rather than guessing. `--no-network` removes `fetch`
+and `require('http')` entirely, for a tree whose contents should not be
+able to leave the machine.
+
 ### Permission prompts
 
-Capabilities that need permission — today, `fetch` reaching a domain the
-policy has not already allowed — ask at the terminal:
+Capabilities that need permission — a `fetch` to a domain the policy has
+not already allowed, or a change to a file — ask at the terminal:
 
 ```
 Allow the agent to access example.com? [y/N]
+Allow the agent to modify src/main.go? [y/N]
 ```
 
 `--approve` decides how those are answered: `prompt` asks, `auto`
@@ -201,10 +226,12 @@ prompt` with stdin redirected is an error rather than a silent
 downgrade.
 
 An approval is remembered for the rest of the session, including across
-invocations, so resuming does not re-ask. A *refusal* is deliberately
-not remembered: being asked twice is a smaller harm than a capability
-silently blocked forever. `agentloop sessions show <id>` lists what a
-session has approved and `agentloop sessions revoke <id>` forgets it.
+invocations, so resuming does not re-ask. A refusal holds for the rest
+of that invocation — the loop re-runs a turn that threw, and re-asking
+on every retry is how you get trained to hit `y` without reading — but
+is never persisted, so a later run is free to allow what an earlier one
+declined. `agentloop sessions show <id>` lists what a session has
+approved and `agentloop sessions revoke <id>` forgets it.
 
 [`examples/cli`](examples/cli) stays as the minimal library demo — one
 `Run` call in 100 lines, which is the thing to read when embedding the

@@ -47,6 +47,10 @@ type options struct {
 	// anyone is at the keyboard.
 	approve  string
 	approval approvalMode
+
+	// noNetwork removes fetch and http, for working on a tree whose
+	// contents should not be able to leave the machine.
+	noNetwork bool
 }
 
 // bind registers the shared flags on fs. Every subcommand binds the
@@ -65,6 +69,7 @@ func (o *options) bind(fs *flag.FlagSet) {
 	fs.BoolVar(&o.jsonStream, "json-stream", false, "in --json mode, also emit response_chunk events")
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress the live activity stream on stderr")
 	fs.StringVar(&o.approve, "approve", "", "how to answer permission prompts: prompt, auto, or deny (default: prompt at a terminal, deny otherwise)")
+	fs.BoolVar(&o.noNetwork, "no-network", false, "remove fetch() and require('http') — the agent can read the workspace but cannot send it anywhere")
 }
 
 // resolve fills in the defaults that need the process to compute them,
@@ -187,12 +192,18 @@ type session struct {
 
 	// store is the durable backing, or nil for an ephemeral session.
 	store *agentloopsql.Store
+
+	// root is the workspace handle every file primitive resolves against.
+	root *os.Root
 }
 
-// close releases the session database, if there is one.
+// close releases the session database and the workspace handle.
 func (s *session) close() {
 	if s.store != nil {
 		s.store.Close()
+	}
+	if s.root != nil {
+		s.root.Close()
 	}
 }
 
@@ -228,16 +239,25 @@ func newSession(o *options, warn func(string), in *bufio.Reader) (*session, erro
 		return nil, err
 	}
 
-	sess := &session{projectCx: projectctx.Render(docs), id: id, store: store}
+	// The workspace root is opened once and held for the session. os.Root
+	// resolves every path against this handle, so ".." and symlinks
+	// cannot reach outside it — confinement enforced by the runtime
+	// rather than by path arithmetic.
+	root, err := os.OpenRoot(o.cwd)
+	if err != nil {
+		if store != nil {
+			store.Close()
+		}
+		return nil, fmt.Errorf("cannot open the workspace %s: %w", o.cwd, err)
+	}
+
+	sess := &session{projectCx: projectctx.Render(docs), id: id, store: store, root: root}
 
 	// The prompter reads the session id through a closure because chat's
 	// /new changes it mid-process, and an approval must not carry across
 	// that boundary into a session the user meant to start clean.
 	prompter := newTerminalPrompter(in, os.Stderr, o.approval, store, func() string { return sess.id })
-	caps, patched := capabilitiesWithApproval(client, o.model, prompter)
-	if !patched && warn != nil {
-		warn("no fetch capability to attach approval prompts to — unapproved domains will fail rather than ask")
-	}
+	caps := buildCapabilities(client, o.model, prompter, root, o.noNetwork, warn)
 	caps = append(caps, skills.Capabilities(sk)...)
 
 	sess.loop = agentloop.New(agentloop.Config{

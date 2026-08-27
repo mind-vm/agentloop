@@ -119,12 +119,14 @@ FLAGS
   --continue              resume the most recently updated session
   --ephemeral             keep the session in memory; write nothing
   --db string             session database path
-  --cwd string            workspace root for AGENTS.md / SKILL.md discovery
+  --cwd string            project directory the agent reads and edits, and
+                          where AGENTS.md / SKILL.md are discovered
   --json                  emit newline-delimited JSON events on stdout
   --json-stream           in --json mode, also emit response_chunk events
   --quiet                 suppress the live activity stream on stderr
   --approve mode          answer permission prompts: prompt, auto, or deny
                           (default: prompt at a terminal, deny otherwise)
+  --no-network            remove fetch() and require('http')
 
 ENVIRONMENT
   OPENAI_API_KEY          required

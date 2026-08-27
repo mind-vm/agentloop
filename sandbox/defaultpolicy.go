@@ -23,12 +23,21 @@ func (allowAllPolicy) Check(context.Context, string, map[string]any) (PolicyChec
 }
 
 // sideEffectTools are the primitives DefaultPolicy denies unless
-// explicitly granted: they move data out of the run (sendEmail) or pull
-// sensitive material into it (secret). fetch/http are handled by the
-// URL rules instead.
+// explicitly granted: they move data out of the run (sendEmail), pull
+// sensitive material into it (secret), or change something on disk that
+// will still be changed after the run ends (writeFile, editFile).
+// fetch/http are handled by the URL rules instead.
+//
+// Workspace READS are deliberately absent. A read confined to the
+// workspace root cannot reach anything the user did not point the agent
+// at, and gating it would mean a permission prompt per file — which in
+// practice trains people to approve without reading. The mutations are
+// where the consequence is.
 var sideEffectTools = map[string]bool{
 	"sendEmail": true,
 	"secret":    true,
+	"writeFile": true,
+	"editFile":  true,
 }
 
 // DefaultPolicy is the conservative PolicyChecker agentloop's Loop

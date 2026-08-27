@@ -118,9 +118,7 @@ func (p *terminalPrompter) confirm(req sandbox.InputRequestData) (any, error) {
 		return nil, err
 	}
 	answer := strings.EqualFold(strings.TrimSpace(line), "y") || strings.EqualFold(strings.TrimSpace(line), "yes")
-	if answer {
-		p.remember(req.Message)
-	}
+	p.remember(req.Message, answer)
 	return answer, nil
 }
 
@@ -200,14 +198,22 @@ func (p *terminalPrompter) recall(question string) (granted, known bool) {
 	return true, true
 }
 
-// remember records an approval for the rest of the process, and for
-// later runs of this session when there is a store to hold it.
-func (p *terminalPrompter) remember(question string) {
+// remember records an answer.
+//
+// Both answers are memoised for the rest of the process: a turn that
+// throws is re-run by the loop, and asking the same question again on
+// every retry is how a person gets trained to hit y without reading.
+//
+// Only an APPROVAL is persisted. A refusal that outlived the process
+// would silently block a capability the user might well allow next
+// time, with nothing on screen to explain why — so the next invocation
+// asks again.
+func (p *terminalPrompter) remember(question string, answer bool) {
 	p.mu.Lock()
-	p.remembered[question] = true
+	p.remembered[question] = answer
 	p.mu.Unlock()
 
-	if p.store == nil {
+	if !answer || p.store == nil {
 		return
 	}
 	if err := p.store.Grant(context.Background(), p.sessionID(), question); err != nil {

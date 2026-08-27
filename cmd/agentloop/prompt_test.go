@@ -136,24 +136,54 @@ func TestConfirmRemembersWithinTheProcess(t *testing.T) {
 	}
 }
 
-// A refusal is deliberately NOT remembered: the user may well allow it
-// next time, and silently blocking forever is the worse failure.
-func TestRefusalIsNotRemembered(t *testing.T) {
-	p, out := prompterFor(t, approvalPrompt, "n\ny\n", nil)
+// A refusal holds for the rest of the process. The loop re-runs a turn
+// that threw, and re-asking on every retry is how a person gets trained
+// to hit y without reading.
+func TestRefusalHoldsForTheProcess(t *testing.T) {
+	p, out := prompterFor(t, approvalPrompt, "n\n", nil)
 	q := sandbox.InputRequestData{InputType: "confirm", Message: "Allow example.com?"}
 
 	if got, _ := p.Request(q); got != false {
 		t.Fatalf("first answer = %v, want false", got)
 	}
+	// Only one answer was supplied; a second read would hit EOF and error.
 	got, err := p.Request(q)
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
-	if got != true {
-		t.Errorf("second answer = %v — a refusal must not stick", got)
+	if got != false {
+		t.Errorf("second answer = %v, want the remembered refusal", got)
 	}
-	if n := strings.Count(out.String(), "[y/N]"); n != 2 {
-		t.Errorf("asked %d times, want 2", n)
+	if n := strings.Count(out.String(), "[y/N]"); n != 1 {
+		t.Errorf("asked %d times, want 1", n)
+	}
+}
+
+// But a refusal is never persisted: one that outlived the process would
+// silently block a capability the user might well allow next time, with
+// nothing on screen to explain why.
+func TestRefusalIsNotPersisted(t *testing.T) {
+	store, err := agentloopsql.Open(filepath.Join(t.TempDir(), "sessions.db"), nil)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	q := sandbox.InputRequestData{InputType: "confirm", Message: "Allow example.com?"}
+
+	first, _ := prompterFor(t, approvalPrompt, "n\n", store)
+	if got, _ := first.Request(q); got != false {
+		t.Fatal("want a refusal")
+	}
+
+	// The next invocation of the same session gets the question back.
+	second, _ := prompterFor(t, approvalPrompt, "y\n", store)
+	got, err := second.Request(q)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if got != true {
+		t.Errorf("got %v — a later run must be free to allow it", got)
 	}
 }
 

@@ -56,6 +56,16 @@ func cmdDoctor(argv []string) int {
 
 	d.section("Workspace")
 	d.info("root", "%s", o.cwd)
+	if _, err := os.OpenRoot(o.cwd); err != nil {
+		d.fail("root", "%s", err)
+	} else {
+		d.ok("file access", "readFile, writeFile, editFile, listDir, glob, grep")
+	}
+	if o.noNetwork {
+		d.info("network", "off (--no-network): fetch() and require('http') are not installed")
+	} else {
+		d.info("network", "on — fetch() asks before reaching an unapproved domain")
+	}
 
 	docs, err := projectctx.Load(o.cwd)
 	if err != nil {
