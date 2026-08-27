@@ -45,6 +45,7 @@ func cmdChat(argv []string) int {
 		r.fatal(err)
 		return exitUsage
 	}
+	defer sess.close()
 
 	interactive := !o.asJSON && isTerminal(os.Stdin)
 	if interactive {

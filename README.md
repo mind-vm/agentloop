@@ -33,11 +33,17 @@ is kept verbatim) and large data never appears in the context window twice.
 - **`agentloopmem`** — in-memory `SessionStore` / `StepStore` for local
   dev, one-shot CLIs, and eval suites. Not for production traffic (no
   durability, no cross-process visibility).
-- **`agentlooptest`** — `StepStoreContract`, a reusable conformance test
-  harness. Point it at your own `StepStore` implementation (Postgres,
-  SQLite, whatever) to hold it to the same behavioural guarantees the
-  loop relies on — see `agentloopmem`'s own `contract_test.go` for the
-  worked example.
+- **`agentloopsql`** — the durable counterpart: one SQLite-backed
+  `*Store` implementing both interfaces, plus the listing and deletion a
+  session manager needs. Uses `modernc.org/sqlite`, a pure-Go driver, so
+  a binary embedding it still cross-compiles with nothing but `GOOS` and
+  `GOARCH`. Several processes can share one database.
+- **`agentlooptest`** — `StepStoreContract` and `SessionStoreContract`,
+  reusable conformance test harnesses. Point them at your own store
+  implementations (Postgres, SQLite, whatever) to hold them to the same
+  behavioural guarantees the loop relies on — see `agentloopmem`'s own
+  `contract_test.go` for the worked example, and `agentloopsql` for a
+  second implementation held to exactly the same bar.
 - **`ext`** — optional `sandbox.Pack`s that are generically useful but
   don't belong in the core sandbox package: `EmailPack` (`sendEmail`),
   `SecretPack` (`secret`), `SearchPack` (`documentSearch`), `StoresPack`
@@ -159,9 +165,23 @@ onto `agentloop.Config`, so `--max-steps`, `--timeout`, and
 real request to confirm the endpoint answers (`--offline` skips it), and
 lists the project instructions and skills it found in the workspace.
 
-Sessions are currently held in memory: `chat` carries history for the
-life of the process, and each `run` starts fresh. A durable store is
-what changes that.
+Sessions are durable. Every run is recorded in a SQLite database, so
+`--session <id>` extends a conversation across separate invocations and
+`--continue` picks up the most recent one:
+
+```sh
+agentloop run --session review "read the diff and tell me what changed"
+agentloop run --continue "now check the tests cover it"
+
+agentloop sessions ls
+agentloop sessions show review
+agentloop sessions rm review
+```
+
+The database lives at `$AGENTLOOP_DB`, else `$XDG_DATA_HOME/agentloop/`,
+else the platform's per-user application directory — `--db` overrides
+all three. `--ephemeral` runs against in-memory stores instead and
+writes nothing, for a turn that should leave no trace.
 
 [`examples/cli`](examples/cli) stays as the minimal library demo — one
 `Run` call in 100 lines, which is the thing to read when embedding the

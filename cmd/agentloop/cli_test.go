@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mind-vm/agentloop"
+	"github.com/mind-vm/agentloop/agentloopsql"
 )
 
 func TestExitCodeFor(t *testing.T) {
@@ -101,6 +103,9 @@ func pipeWith(t *testing.T, content string) *os.File {
 }
 
 func TestOptionsResolveDefaults(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	t.Setenv("AGENTLOOP_DB", dbPath)
+
 	var o options
 	if err := o.resolve(); err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -108,16 +113,21 @@ func TestOptionsResolveDefaults(t *testing.T) {
 	if o.cwd == "" {
 		t.Error("cwd should default to the working directory")
 	}
-	if o.session == "" {
-		t.Error("session should default to a generated id")
+	if o.db != dbPath {
+		t.Errorf("db = %q, want AGENTLOOP_DB %q", o.db, dbPath)
 	}
+}
 
-	var other options
-	if err := other.resolve(); err != nil {
+// An ephemeral run writes nowhere, so it must not silently acquire a
+// database path it would then be asked to create.
+func TestOptionsResolveEphemeralTakesNoDatabase(t *testing.T) {
+	t.Setenv("AGENTLOOP_DB", filepath.Join(t.TempDir(), "sessions.db"))
+	o := options{ephemeral: true}
+	if err := o.resolve(); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if other.session == o.session {
-		t.Error("generated session ids should not repeat")
+	if o.db != "" {
+		t.Errorf("db = %q, want empty for an ephemeral run", o.db)
 	}
 }
 
@@ -127,6 +137,11 @@ func TestOptionsResolveRejectsNonsense(t *testing.T) {
 		"negative max steps":       {maxSteps: -1},
 		"negative history window":  {historyWindow: -5},
 		"negative timeout":         {timeout: -1},
+		// --session names a session and --continue picks one; asking for
+		// both is a contradiction, not a preference to be guessed at.
+		"session with continue":   {session: "s-1", resume: true},
+		"continue with ephemeral": {resume: true, ephemeral: true},
+		"db with ephemeral":       {db: "x.db", ephemeral: true},
 	}
 	for name, o := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -135,6 +150,93 @@ func TestOptionsResolveRejectsNonsense(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- session selection ----------------------------------------------
+
+func TestResolveStoresEphemeralGeneratesAnId(t *testing.T) {
+	o := options{ephemeral: true}
+	if err := o.resolve(); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	_, _, store, id, err := resolveStores(&o)
+	if err != nil {
+		t.Fatalf("resolveStores: %v", err)
+	}
+	if store != nil {
+		t.Error("an ephemeral run must not open a database")
+	}
+	if id == "" {
+		t.Error("want a generated session id")
+	}
+}
+
+func TestResolveStoresHonoursAnExplicitSession(t *testing.T) {
+	o := freshDBOptions(t)
+	o.session = "chosen"
+	_, _, store, id, err := resolveStores(&o)
+	if err != nil {
+		t.Fatalf("resolveStores: %v", err)
+	}
+	defer store.Close()
+	if id != "chosen" {
+		t.Errorf("id = %q, want %q", id, "chosen")
+	}
+}
+
+// --continue with nothing stored must say so rather than quietly
+// starting a session the user did not ask for.
+func TestResolveStoresContinueWithNothingStored(t *testing.T) {
+	o := freshDBOptions(t)
+	o.resume = true
+	_, _, store, _, err := resolveStores(&o)
+	if store != nil {
+		store.Close()
+	}
+	if err == nil {
+		t.Fatal("want an error when there is nothing to continue")
+	}
+	if !strings.Contains(err.Error(), "nothing to continue") {
+		t.Errorf("error should explain itself, got %q", err)
+	}
+}
+
+func TestResolveStoresContinuePicksTheMostRecent(t *testing.T) {
+	o := freshDBOptions(t)
+
+	seed, err := agentloopsql.Open(o.db, nil)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for _, id := range []string{"older", "newer"} {
+		if err := seed.Append(context.Background(), agentloop.RunStep{
+			SessionID: id, StepType: "user", Content: "hi", ToolArgs: []byte("{}"),
+		}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	seed.Close()
+
+	o.resume = true
+	_, _, store, id, err := resolveStores(&o)
+	if err != nil {
+		t.Fatalf("resolveStores: %v", err)
+	}
+	defer store.Close()
+	if id != "newer" {
+		t.Errorf("id = %q, want the most recently updated session", id)
+	}
+}
+
+// freshDBOptions returns resolved options pointing at an empty database
+// in the test's own temp directory.
+func freshDBOptions(t *testing.T) options {
+	t.Helper()
+	o := options{db: filepath.Join(t.TempDir(), "sessions.db")}
+	if err := o.resolve(); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	return o
 }
 
 func TestOptionsBindParsesFlags(t *testing.T) {

@@ -44,6 +44,7 @@ func cmdRun(argv []string) int {
 		// problem, not a failed agent run.
 		return exitUsage
 	}
+	defer sess.close()
 
 	ctx, stop := signalContext()
 	defer stop()

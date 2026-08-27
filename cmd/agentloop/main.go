@@ -41,9 +41,10 @@ const (
 // else is treated as the start of a message, so `agentloop "hello"`
 // keeps working without the explicit `run`.
 var subcommands = map[string]func([]string) int{
-	"run":    cmdRun,
-	"chat":   cmdChat,
-	"doctor": cmdDoctor,
+	"run":      cmdRun,
+	"chat":     cmdChat,
+	"sessions": cmdSessions,
+	"doctor":   cmdDoctor,
 }
 
 func main() {
@@ -98,6 +99,9 @@ USAGE
   agentloop [flags] <message>     run one turn (the default subcommand)
   agentloop run [flags] <message> run one turn
   agentloop chat [flags]          interactive conversation
+  agentloop sessions ls           list stored sessions
+  agentloop sessions show <id>    print a session's trace
+  agentloop sessions rm <id>...   delete stored sessions
   agentloop doctor [flags]        check the environment and workspace
   agentloop version               print version information
   agentloop help                  print this message
@@ -110,7 +114,10 @@ FLAGS
   --max-steps int         cap LLM round-trips per run (default 20)
   --timeout duration      wall-clock cap per run (default 5m)
   --history-window int    prior steps rehydrated into context (default 80)
-  --session string        session id to run under (default: generated)
+  --session string        session id to run under (default: a new one)
+  --continue              resume the most recently updated session
+  --ephemeral             keep the session in memory; write nothing
+  --db string             session database path
   --cwd string            workspace root for AGENTS.md / SKILL.md discovery
   --json                  emit newline-delimited JSON events on stdout
   --json-stream           in --json mode, also emit response_chunk events
@@ -121,6 +128,7 @@ ENVIRONMENT
   OPENAI_BASE_URL         any OpenAI-wire-compatible endpoint
   OPENAI_CHAT_MODEL       model name that endpoint expects
   OPENAI_MAX_RETRIES      retries after a failed request (default 3, 0 disables)
+  AGENTLOOP_DB            session database path, unless --db says otherwise
 
 EXIT CODES
   0 completed   1 error   2 max iterations reached   3 usage

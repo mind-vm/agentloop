@@ -81,9 +81,18 @@ func cmdDoctor(argv []string) int {
 		}
 	}
 
-	d.section("Notes")
-	d.info("sessions", "held in memory only — `chat` keeps history for the life of")
-	d.info("", "the process, and `run` starts fresh every time")
+	d.section("Sessions")
+	d.info("database", "%s", o.db)
+	if store, err := openStore(&o); err != nil {
+		d.fail("database", "%s", err)
+	} else {
+		defer store.Close()
+		if rows, err := store.List(context.Background(), 0); err != nil {
+			d.fail("database", "%s", err)
+		} else {
+			d.ok("stored", "%d session(s)", len(rows))
+		}
+	}
 
 	if d.failed {
 		return exitError
