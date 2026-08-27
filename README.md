@@ -123,6 +123,50 @@ A failed request is retried up to three times by default — set
 `OPENAI_MAX_RETRIES` (or `llm.Config.MaxRetries`) to tune that, or to
 `0` to turn retrying off entirely.
 
+## The CLI
+
+[`cmd/agentloop`](cmd/agentloop) is the engine as a command. It discovers
+`AGENTS.md` and `SKILL.md` from a workspace directory, composes the
+default capability bundle, and runs turns:
+
+```sh
+go install github.com/mind-vm/agentloop/cmd/agentloop@latest
+
+agentloop "What's 12 * 7? Reply with just the number."
+agentloop chat
+agentloop doctor
+```
+
+There are two output modes. By default the loop's activity streams to
+stderr and **stdout carries only the agent's answer**, so
+`answer=$(agentloop run "...")` captures what you would expect and
+nothing else — no banner, no framing. With `--json`, stdout becomes a
+newline-delimited stream of every run event followed by a terminal
+`result` object, which is the mode another program should drive:
+
+```sh
+agentloop run --json "summarise this repo" | jq -c 'select(.type=="result")'
+```
+
+The exit code distinguishes how the run ended, so a script never has to
+parse output to find out: `0` completed, `1` error, `2` max iterations
+reached, `3` usage. `agentloop help` lists the flags — they map directly
+onto `agentloop.Config`, so `--max-steps`, `--timeout`, and
+`--history-window` mean exactly what `MaxIterations`, `RunTimeout`, and
+`HistoryWindow` mean in Go.
+
+`agentloop doctor` reports the resolved endpoint and model, makes one
+real request to confirm the endpoint answers (`--offline` skips it), and
+lists the project instructions and skills it found in the workspace.
+
+Sessions are currently held in memory: `chat` carries history for the
+life of the process, and each `run` starts fresh. A durable store is
+what changes that.
+
+[`examples/cli`](examples/cli) stays as the minimal library demo — one
+`Run` call in 100 lines, which is the thing to read when embedding the
+engine rather than running it.
+
 ## Extending
 
 - **Custom capabilities** — a `Capability` is a name plus a `Build` func
