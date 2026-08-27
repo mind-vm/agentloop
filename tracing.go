@@ -35,8 +35,9 @@ const (
 	attrPromptTok   = "agentloop.tokens.prompt"
 	attrCompleteTok = "agentloop.tokens.completion"
 
-	attrCompactBefore = "agentloop.compact.messages_before"
-	attrCompactAfter  = "agentloop.compact.messages_after"
+	attrCompactBefore     = "agentloop.compact.messages_before"
+	attrCompactAfter      = "agentloop.compact.messages_after"
+	attrCompactRetainFrom = "agentloop.compact.retain_from_step"
 )
 
 // resolveTracer returns tp's "github.com/mind-vm/agentloop" Tracer, or a

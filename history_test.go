@@ -10,7 +10,7 @@ func TestRehydrateHistory_SkipsNonReplayableSteps(t *testing.T) {
 		{StepType: "error", Content: "something blew up"}, // must be skipped
 		{StepType: "response", Content: "Hello back."},
 	}
-	out := rehydrateHistory(steps, HistoryWindow)
+	out, _ := rehydrateHistory(steps, HistoryWindow)
 	if len(out) != 4 {
 		t.Fatalf("expected 4 replayable turns, got %d (%v)", len(out), out)
 	}
@@ -33,7 +33,7 @@ func TestRehydrateHistory_RespectsWindow(t *testing.T) {
 	for i := range steps {
 		steps[i] = RunStep{StepType: "user", Content: "msg"}
 	}
-	out := rehydrateHistory(steps, HistoryWindow)
+	out, _ := rehydrateHistory(steps, HistoryWindow)
 	if len(out) != HistoryWindow {
 		t.Fatalf("expected window-clamped result of %d, got %d", HistoryWindow, len(out))
 	}
@@ -44,11 +44,11 @@ func TestRehydrateHistory_CustomWindow(t *testing.T) {
 	for i := range steps {
 		steps[i] = RunStep{StepType: "user", Content: "msg"}
 	}
-	if out := rehydrateHistory(steps, 3); len(out) != 3 {
+	if out, _ := rehydrateHistory(steps, 3); len(out) != 3 {
 		t.Fatalf("expected custom window of 3, got %d", len(out))
 	}
 	// Non-positive falls back to the package default.
-	if out := rehydrateHistory(steps, 0); len(out) != 10 {
+	if out, _ := rehydrateHistory(steps, 0); len(out) != 10 {
 		t.Fatalf("expected default-window replay of all 10, got %d", len(out))
 	}
 }

@@ -86,6 +86,12 @@ type Config struct {
 	// in compressed form instead of falling off the end of
 	// HistoryWindow unnoticed.
 	//
+	// A compaction that reports a CompactResult.Summary is persisted as
+	// a StepTypeSummary checkpoint, and later runs rehydrate from that
+	// rather than summarizing the same turns again — see
+	// rehydrateHistory. The covered steps remain in the trace; only
+	// what is replayed to the model changes.
+	//
 	// Optional; nil keeps the default behaviour — history is truncated
 	// to HistoryWindow and the overflow is simply gone. Compaction is
 	// best-effort: a Compactor that fails warns and the run proceeds on
@@ -306,8 +312,8 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		model = l.cfg.Model
 	}
 
-	history := rehydrateHistory(priorSteps, l.cfg.HistoryWindow)
-	history = l.compactHistory(ctx, req, usage, history)
+	history, stepOf := rehydrateHistory(priorSteps, l.cfg.HistoryWindow)
+	history = l.compactHistory(ctx, req, usage, history, stepOf, writeStep)
 	history = append(history, llm.Message{Role: "user", Content: req.Message})
 	// baseLen marks the end of the prior conversation, before this Run
 	// appends anything of its own — elideStaleCode uses it so eliding
@@ -666,7 +672,7 @@ func redactEvent(r *redact.Redactor, evt RunEvent) RunEvent {
 // every path, including the error path: a provider call that produced
 // an unusable summary still cost what it cost, and a Run whose reported
 // usage omitted it would understate the session.
-func (l *loop) compactHistory(ctx context.Context, req RunRequest, usage *runTokenUsage, history []llm.Message) []llm.Message {
+func (l *loop) compactHistory(ctx context.Context, req RunRequest, usage *runTokenUsage, history []llm.Message, stepOf []int32, writeStep func(RunStep)) []llm.Message {
 	if l.cfg.Compactor == nil {
 		return history
 	}
@@ -689,6 +695,29 @@ func (l *loop) compactHistory(ctx context.Context, req RunRequest, usage *runTok
 		return history
 	}
 
+	// Persist the summary as a checkpoint so the NEXT Run rehydrates
+	// from it instead of paying to summarize the same turns again. A
+	// compactor that left Summary empty compacts for this run only; a
+	// failure to record the checkpoint costs that saving and nothing
+	// else, so it warns rather than failing the run.
+	persisted := false
+	if res.Summary != "" {
+		if retain, ok := retainFromStep(res.RetainedFrom, stepOf); ok {
+			marker, err := json.Marshal(CompactionCheckpoint{RetainFromStep: retain})
+			if err != nil {
+				l.emit(req.OnEvent, RunEvent{Type: "warning", Content: "compaction checkpoint not persisted: " + err.Error()})
+			} else {
+				writeStep(RunStep{
+					StepType: StepTypeSummary,
+					Content:  res.Summary,
+					ToolArgs: marker,
+				})
+				persisted = true
+				span.SetAttributes(attribute.Int64(attrCompactRetainFrom, int64(retain)))
+			}
+		}
+	}
+
 	after := len(res.Messages)
 	span.SetAttributes(
 		attribute.Int(attrCompactBefore, before),
@@ -697,8 +726,28 @@ func (l *loop) compactHistory(ctx context.Context, req RunRequest, usage *runTok
 	if after < before {
 		l.emit(req.OnEvent, RunEvent{
 			Type: "compacted",
-			Args: map[string]any{"messages_before": before, "messages_after": after},
+			Args: map[string]any{"messages_before": before, "messages_after": after, "persisted": persisted},
 		})
 	}
 	return res.Messages
+}
+
+// retainFromStep translates a compactor's message-space RetainedFrom
+// into the StepIndex a checkpoint must name, using the step each
+// rehydrated message came from.
+//
+// It reports false when there is no checkpoint worth writing: a
+// RetainedFrom of zero or less means the compaction folded nothing
+// away, and recording a checkpoint that covers nothing would replay a
+// summary alongside the very history it summarizes.
+func retainFromStep(retainedFrom int, stepOf []int32) (int32, bool) {
+	if retainedFrom <= 0 || len(stepOf) == 0 {
+		return 0, false
+	}
+	if retainedFrom >= len(stepOf) {
+		// Everything was folded away, so the retained history starts
+		// after the last step that had a message — one past it.
+		return stepOf[len(stepOf)-1] + 1, true
+	}
+	return stepOf[retainedFrom], true
 }

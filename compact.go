@@ -2,11 +2,48 @@ package agentloop
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/mind-vm/agentloop/llm"
 )
+
+// StepTypeSummary marks a compaction checkpoint in a session's step
+// trace: a RunStep whose Content is the summary to replay in place of
+// the steps it covers, and whose ToolArgs carries a
+// CompactionCheckpoint saying where the retained history resumes.
+//
+// The steps a checkpoint covers stay in the trace — this changes only
+// what is replayed to the model, never what a human reviewing the
+// session can see.
+const StepTypeSummary = "summary"
+
+// CompactionCheckpoint is the ToolArgs payload of a StepTypeSummary
+// step.
+type CompactionCheckpoint struct {
+	// RetainFromStep is the StepIndex the retained history resumes at.
+	// Every earlier step is represented by the summary instead of being
+	// replayed, so a session that has been compacted once does not pay
+	// to summarize the same turns again on the next Run.
+	RetainFromStep int32 `json:"retain_from_step"`
+}
+
+// decodeCheckpoint reads a checkpoint marker. A marker that will not
+// parse is reported as an error rather than defaulted, because a
+// zero-valued RetainFromStep would silently mean "retain everything" —
+// replaying the full history AND the summary that was meant to replace
+// it.
+func decodeCheckpoint(raw json.RawMessage) (CompactionCheckpoint, error) {
+	var cp CompactionCheckpoint
+	if len(raw) == 0 {
+		return cp, fmt.Errorf("agentloop: compaction checkpoint has no marker")
+	}
+	if err := json.Unmarshal(raw, &cp); err != nil {
+		return cp, fmt.Errorf("agentloop: compaction checkpoint marker: %w", err)
+	}
+	return cp, nil
+}
 
 // executionResultPrefix labels the user turn that carries a run()'s
 // logs back to the model. The loop writes it (run.go), history replay
@@ -42,6 +79,24 @@ type CompactResult struct {
 	// Tokens is what producing it cost, zero for an implementation that
 	// makes no provider call.
 	Tokens TokenUsage
+
+	// Summary, when non-empty, is the exact message content to replay
+	// in place of the folded-away history on FUTURE runs. Setting it
+	// (together with RetainedFrom) is what makes a compaction durable:
+	// the loop persists it as a StepTypeSummary checkpoint, and the
+	// next Run rehydrates from that instead of summarizing again.
+	//
+	// Leave it empty to compact for this run only. That costs a
+	// summarization per Run, so an implementation that can express its
+	// result as "one message replacing a prefix" should set it.
+	Summary string
+
+	// RetainedFrom is the index, in the history passed to Compact, of
+	// the first message kept verbatim — everything before it is what
+	// Summary stands for. Ignored when Summary is empty, and a value
+	// outside (0, len(history)] disables persistence: a compaction that
+	// folded nothing away has no checkpoint worth writing.
+	RetainedFrom int
 }
 
 const (
@@ -79,11 +134,13 @@ Be specific — names, ids, numbers, paths — and omit anything the agent can t
 // SummarizingCompactor folds the older part of a long history into one
 // summary message, keeping the most recent turns verbatim.
 //
-// Cost: once a session passes Trigger, every Run makes one extra
-// provider call, because the loop reloads history from the StepStore
-// each time and compaction is not persisted. Trigger is the knob for
-// how often that happens — raise it to pay less often and send more
-// verbatim history, lower it for the reverse.
+// Cost: a summarization happens when the rehydrated history passes
+// Trigger. Because the loop persists each result as a checkpoint (see
+// CompactResult.Summary), that is once per Trigger-worth of NEW
+// conversation rather than once per Run — a session compacted at turn
+// 60 does not pay again until it has grown back past Trigger. Trigger
+// is the knob: raise it to pay less often and send more verbatim
+// history, lower it for the reverse.
 type SummarizingCompactor struct {
 	// LLM performs the summarization. Required; a nil client makes
 	// Compact a no-op that returns the history unchanged, so a missing
@@ -144,13 +201,20 @@ func (c *SummarizingCompactor) Compact(ctx context.Context, history []llm.Messag
 		return CompactResult{Messages: history, Tokens: tokens}, fmt.Errorf("agentloop: compact: empty summary")
 	}
 
+	// The persisted Summary is the message content verbatim, so a
+	// replayed checkpoint is indistinguishable from the compaction that
+	// produced it.
+	content := fmt.Sprintf("[summary of the %d earlier messages in this session, which are no longer shown in full]\n%s",
+		len(older), summary)
+
 	out := make([]llm.Message, 0, len(tail)+1)
-	out = append(out, llm.Message{
-		Role: "user",
-		Content: fmt.Sprintf("[summary of the %d earlier messages in this session, which are no longer shown in full]\n%s",
-			len(older), summary),
-	})
-	return CompactResult{Messages: append(out, tail...), Tokens: tokens}, nil
+	out = append(out, llm.Message{Role: "user", Content: content})
+	return CompactResult{
+		Messages:     append(out, tail...),
+		Tokens:       tokens,
+		Summary:      content,
+		RetainedFrom: split,
+	}, nil
 }
 
 // bounds resolves Trigger and Keep, guaranteeing keep < trigger so a

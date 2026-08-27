@@ -148,11 +148,14 @@ A failed request is retried up to three times by default — set
   cheap model), and it never splits a `run()` block from the execution
   result it produced. Raising `HistoryWindow` alongside it is how a
   session gets long-term memory — the prompt stays bounded by the
-  compactor rather than by the window. The cost is one extra provider
-  call per `Run` once a session passes `Trigger`, since compaction isn't
-  persisted; `Trigger` is the knob for how often you pay it. Compaction
-  is best-effort — a failure emits a `warning` event and the run
-  proceeds on the uncompacted history.
+  compactor rather than by the window. Each compaction is persisted as
+  a `summary` checkpoint step, so the next `Run` rehydrates from it
+  rather than summarizing the same turns again — a long session pays for
+  a summarization only when it has grown past `Trigger` since the last
+  one, not on every `Run`. The covered steps stay in the trace; only
+  what is replayed to the model changes. Compaction is best-effort — a
+  failure emits a `warning` event and the run proceeds on the
+  uncompacted history.
 - **Project instructions** — `projectctx.Load(cwd)` walks from the
   repository root down to `cwd` collecting `AGENTS.md` files (general
   first, most specific last), and `projectctx.Render(docs)` turns them

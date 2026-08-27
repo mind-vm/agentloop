@@ -2,6 +2,7 @@ package agentloop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -285,4 +286,195 @@ func equalMessages(a, b []llm.Message) bool {
 		}
 	}
 	return true
+}
+
+// ---- checkpoint replay ----
+
+// checkpoint builds a StepTypeSummary step covering everything before
+// retainFrom.
+func checkpoint(t *testing.T, index, retainFrom int32, summary string) RunStep {
+	t.Helper()
+	marker, err := json.Marshal(CompactionCheckpoint{RetainFromStep: retainFrom})
+	if err != nil {
+		t.Fatalf("marshal checkpoint: %v", err)
+	}
+	return RunStep{StepIndex: index, StepType: StepTypeSummary, Content: summary, ToolArgs: marker}
+}
+
+func userStep(index int32, content string) RunStep {
+	return RunStep{StepIndex: index, StepType: "user", Content: content}
+}
+
+func contents(msgs []llm.Message) []string {
+	out := make([]string, len(msgs))
+	for i, m := range msgs {
+		out[i] = m.Content
+	}
+	return out
+}
+
+func TestRehydrateReplaysCheckpointInsteadOfCoveredSteps(t *testing.T) {
+	steps := []RunStep{
+		userStep(0, "ancient one"),
+		userStep(1, "ancient two"),
+		userStep(2, "retained one"),
+		userStep(3, "retained two"),
+		checkpoint(t, 4, 2, "[summary] the ancient turns"),
+		userStep(5, "after the checkpoint"),
+	}
+
+	msgs, stepOf := rehydrateHistory(steps, HistoryWindow)
+	got := contents(msgs)
+	want := []string{"[summary] the ancient turns", "retained one", "retained two", "after the checkpoint"}
+	if len(got) != len(want) {
+		t.Fatalf("replayed %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("replayed %q, want %q", got, want)
+		}
+	}
+	// The step indices must line up with the messages, since a later
+	// compaction translates its split back through them.
+	if len(stepOf) != len(msgs) {
+		t.Fatalf("stepOf has %d entries for %d messages", len(stepOf), len(msgs))
+	}
+	if stepOf[1] != 2 || stepOf[3] != 5 {
+		t.Errorf("stepOf = %v, want the retained messages to carry their own indices", stepOf)
+	}
+}
+
+func TestRehydrateReplaysOnlyTheNewestCheckpoint(t *testing.T) {
+	steps := []RunStep{
+		userStep(0, "oldest"),
+		checkpoint(t, 1, 0, "[summary] first pass"),
+		userStep(2, "middle"),
+		checkpoint(t, 3, 2, "[summary] second pass"),
+		userStep(4, "newest"),
+	}
+
+	got := contents(mustRehydrate(t, steps))
+	for _, unwanted := range []string{"[summary] first pass", "oldest"} {
+		for _, c := range got {
+			if c == unwanted {
+				t.Errorf("replayed %q; the newer checkpoint already subsumes it", unwanted)
+			}
+		}
+	}
+	if got[0] != "[summary] second pass" {
+		t.Fatalf("replayed %q, want the newest summary first", got)
+	}
+}
+
+// An unusable checkpoint must be ignored rather than half-honoured:
+// replaying nothing in place of the steps it claims to cover would
+// erase that stretch of the conversation.
+func TestRehydrateIgnoresUnusableCheckpoints(t *testing.T) {
+	tests := []struct {
+		name string
+		step RunStep
+	}{
+		{
+			name: "no marker",
+			step: RunStep{StepIndex: 2, StepType: StepTypeSummary, Content: "[summary] x"},
+		},
+		{
+			name: "unparseable marker",
+			step: RunStep{StepIndex: 2, StepType: StepTypeSummary, Content: "[summary] x", ToolArgs: []byte("not json")},
+		},
+		{
+			name: "empty summary",
+			step: checkpoint(t, 2, 1, "   "),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			steps := []RunStep{userStep(0, "first"), userStep(1, "second"), tt.step, userStep(3, "third")}
+			got := contents(mustRehydrate(t, steps))
+			want := []string{"first", "second", "third"}
+			if len(got) != len(want) {
+				t.Fatalf("replayed %q, want the full history %q", got, want)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("replayed %q, want %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+func mustRehydrate(t *testing.T, steps []RunStep) []llm.Message {
+	t.Helper()
+	msgs, _ := rehydrateHistory(steps, HistoryWindow)
+	return msgs
+}
+
+// ---- retainFromStep ----
+
+func TestRetainFromStep(t *testing.T) {
+	stepOf := []int32{0, 3, 7, 9}
+	tests := []struct {
+		name         string
+		retainedFrom int
+		stepOf       []int32
+		want         int32
+		wantOK       bool
+	}{
+		{name: "normal split", retainedFrom: 2, stepOf: stepOf, want: 7, wantOK: true},
+		// Nothing folded away means there is no checkpoint worth writing.
+		{name: "retained everything", retainedFrom: 0, stepOf: stepOf},
+		{name: "negative", retainedFrom: -1, stepOf: stepOf},
+		{name: "no messages", retainedFrom: 1},
+		// Folding everything leaves the retained history starting one
+		// past the last replayed step.
+		{name: "folded everything", retainedFrom: 4, stepOf: stepOf, want: 10, wantOK: true},
+		{name: "beyond the end", retainedFrom: 99, stepOf: stepOf, want: 10, wantOK: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := retainFromStep(tt.retainedFrom, tt.stepOf)
+			if ok != tt.wantOK || (ok && got != tt.want) {
+				t.Fatalf("retainFromStep(%d, %v) = (%d, %v), want (%d, %v)",
+					tt.retainedFrom, tt.stepOf, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestCompactReportsWhatToPersist(t *testing.T) {
+	stub := &stubSummarizer{reply: "the summary"}
+	c := &SummarizingCompactor{LLM: stub, Trigger: 10, Keep: 4}
+	h := turns(8)
+
+	res, err := c.Compact(context.Background(), h)
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if res.Summary == "" {
+		t.Fatal("Summary must be set for the loop to persist a checkpoint")
+	}
+	// The persisted text must be the message verbatim, so a replayed
+	// checkpoint is indistinguishable from the compaction that made it.
+	if res.Summary != res.Messages[0].Content {
+		t.Errorf("Summary = %q, want the exact replayed message %q", res.Summary, res.Messages[0].Content)
+	}
+	if res.RetainedFrom <= 0 || res.RetainedFrom >= len(h) {
+		t.Errorf("RetainedFrom = %d, want a real split within 0..%d", res.RetainedFrom, len(h))
+	}
+	// Everything from RetainedFrom on is what stayed verbatim.
+	if !equalMessages(res.Messages[1:], h[res.RetainedFrom:]) {
+		t.Error("RetainedFrom does not identify the messages that were kept")
+	}
+}
+
+func TestCompactBelowTriggerReportsNothingToPersist(t *testing.T) {
+	c := &SummarizingCompactor{LLM: &stubSummarizer{reply: "unused"}, Trigger: 100, Keep: 5}
+	res, err := c.Compact(context.Background(), turns(3))
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if res.Summary != "" || res.RetainedFrom != 0 {
+		t.Errorf("got Summary=%q RetainedFrom=%d; a no-op compaction has no checkpoint to write", res.Summary, res.RetainedFrom)
+	}
 }
