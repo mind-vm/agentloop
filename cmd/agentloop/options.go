@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/google/uuid"
 
@@ -38,6 +41,12 @@ type options struct {
 	asJSON        bool
 	jsonStream    bool
 	quiet         bool
+
+	// approve is the raw --approve value; approval is what resolve
+	// settles it to, including the default that depends on whether
+	// anyone is at the keyboard.
+	approve  string
+	approval approvalMode
 }
 
 // bind registers the shared flags on fs. Every subcommand binds the
@@ -55,6 +64,7 @@ func (o *options) bind(fs *flag.FlagSet) {
 	fs.BoolVar(&o.asJSON, "json", false, "emit newline-delimited JSON events on stdout")
 	fs.BoolVar(&o.jsonStream, "json-stream", false, "in --json mode, also emit response_chunk events")
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress the live activity stream on stderr")
+	fs.StringVar(&o.approve, "approve", "", "how to answer permission prompts: prompt, auto, or deny (default: prompt at a terminal, deny otherwise)")
 }
 
 // resolve fills in the defaults that need the process to compute them,
@@ -89,7 +99,41 @@ func (o *options) resolve() error {
 	if o.maxSteps < 0 || o.historyWindow < 0 || o.timeout < 0 {
 		return errors.New("--max-steps, --history-window and --timeout cannot be negative")
 	}
+
+	approval, err := resolveApprovalMode(o.approve, isTerminal(os.Stdin))
+	if err != nil {
+		return err
+	}
+	o.approval = approval
 	return nil
+}
+
+// resolveApprovalMode settles how permission prompts get answered.
+//
+// The default depends on whether anyone is there to answer: prompt at a
+// terminal, deny otherwise. Denying is the right unattended default — a
+// run driven by a script must fail closed rather than block forever on
+// an answer nobody will give, and a capability refused is recoverable in
+// a way an approval nobody saw is not.
+//
+// Asking for prompting with no terminal is a usage error rather than a
+// silent downgrade: the caller stated an expectation the environment
+// cannot meet, and quietly doing something else would hide that.
+func resolveApprovalMode(requested string, hasTerminal bool) (approvalMode, error) {
+	mode, err := parseApprovalMode(requested)
+	if err != nil {
+		return "", err
+	}
+	if mode == "" {
+		if hasTerminal {
+			return approvalPrompt, nil
+		}
+		return approvalDeny, nil
+	}
+	if mode == approvalPrompt && !hasTerminal {
+		return "", errors.New("--approve prompt needs a terminal to ask at; use auto or deny when stdin is redirected")
+	}
+	return mode, nil
 }
 
 // configureLogging points the engine's slog output at stderr and quiets
@@ -155,7 +199,13 @@ func (s *session) close() {
 // newSession builds the loop for these options. warn receives non-fatal
 // setup problems — a partially readable AGENTS.md tree still yields the
 // docs that did load, and that is worth a warning rather than an exit.
-func newSession(o *options, warn func(string)) (*session, error) {
+//
+// in is the reader permission prompts are answered on. It is passed in
+// rather than opened here so it can be the SAME reader the chat REPL
+// reads messages from: two independent buffered readers over one stdin
+// would race for buffered bytes, and an approval prompt would swallow
+// the user's next message.
+func newSession(o *options, warn func(string), in *bufio.Reader) (*session, error) {
 	client, err := llm.NewOpenAI(llm.ConfigFromEnv())
 	if err != nil {
 		return nil, err
@@ -178,8 +228,19 @@ func newSession(o *options, warn func(string)) (*session, error) {
 		return nil, err
 	}
 
-	caps := append(agentloop.DefaultCapabilities(client, o.model), skills.Capabilities(sk)...)
-	loop := agentloop.New(agentloop.Config{
+	sess := &session{projectCx: projectctx.Render(docs), id: id, store: store}
+
+	// The prompter reads the session id through a closure because chat's
+	// /new changes it mid-process, and an approval must not carry across
+	// that boundary into a session the user meant to start clean.
+	prompter := newTerminalPrompter(in, os.Stderr, o.approval, store, func() string { return sess.id })
+	caps, patched := capabilitiesWithApproval(client, o.model, prompter)
+	if !patched && warn != nil {
+		warn("no fetch capability to attach approval prompts to — unapproved domains will fail rather than ask")
+	}
+	caps = append(caps, skills.Capabilities(sk)...)
+
+	sess.loop = agentloop.New(agentloop.Config{
 		LLM:            client,
 		Sessions:       sessions,
 		Steps:          steps,
@@ -189,8 +250,7 @@ func newSession(o *options, warn func(string)) (*session, error) {
 		RunTimeout:     o.timeout,
 		HistoryWindow:  o.historyWindow,
 	})
-
-	return &session{loop: loop, projectCx: projectctx.Render(docs), id: id, store: store}, nil
+	return sess, nil
 }
 
 // resolveStores opens the backing stores and settles which session this
@@ -266,13 +326,13 @@ func exitCodeFor(res agentloop.RunResult, err error) int {
 	return exitError
 }
 
-// isTerminal reports whether f is attached to a character device — the
-// standard way to tell an interactive terminal from a pipe or file
-// without taking a dependency for it.
+// isTerminal reports whether f is a terminal someone could be typing at.
+//
+// This asks the terminal driver, rather than testing for a character
+// device. /dev/null IS a character device, so the cheaper check calls
+// `agentloop run < /dev/null` interactive — precisely the unattended
+// invocation that must fail closed instead of stopping to ask a question
+// nobody will answer.
 func isTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }

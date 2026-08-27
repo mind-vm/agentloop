@@ -393,3 +393,95 @@ func TestOpenSetsBusyTimeout(t *testing.T) {
 		t.Errorf("busy_timeout = %d, want a positive wait", timeout)
 	}
 }
+
+// --- grants ---------------------------------------------------------
+
+func TestGrants(t *testing.T) {
+	ctx := context.Background()
+	s := fresh(t)
+
+	granted, err := s.IsGranted(ctx, "s1", "Allow example.com?")
+	if err != nil {
+		t.Fatalf("IsGranted: %v", err)
+	}
+	if granted {
+		t.Fatal("nothing has been approved yet")
+	}
+
+	if err := s.Grant(ctx, "s1", "Allow example.com?"); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+	// The same approval twice is normal — a capability may ask again in
+	// a process that has not memoised it.
+	if err := s.Grant(ctx, "s1", "Allow example.com?"); err != nil {
+		t.Fatalf("Grant again: %v", err)
+	}
+
+	granted, err = s.IsGranted(ctx, "s1", "Allow example.com?")
+	if err != nil {
+		t.Fatalf("IsGranted: %v", err)
+	}
+	if !granted {
+		t.Error("want the approval remembered")
+	}
+
+	// Grants are per session and per question.
+	for _, tc := range []struct{ session, prompt string }{
+		{"s2", "Allow example.com?"},
+		{"s1", "Allow evil.example?"},
+	} {
+		granted, err := s.IsGranted(ctx, tc.session, tc.prompt)
+		if err != nil {
+			t.Fatalf("IsGranted: %v", err)
+		}
+		if granted {
+			t.Errorf("approval leaked to (%s, %s)", tc.session, tc.prompt)
+		}
+	}
+
+	list, err := s.Grants(ctx, "s1")
+	if err != nil {
+		t.Fatalf("Grants: %v", err)
+	}
+	if len(list) != 1 || list[0] != "Allow example.com?" {
+		t.Errorf("Grants = %v, want one entry", list)
+	}
+
+	if err := s.Revoke(ctx, "s1"); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	granted, err = s.IsGranted(ctx, "s1", "Allow example.com?")
+	if err != nil {
+		t.Fatalf("IsGranted after revoke: %v", err)
+	}
+	if granted {
+		t.Error("revoking should put the question back")
+	}
+}
+
+// A stale grant is worse than an orphaned row: it would silently
+// pre-approve a later session that happened to reuse the id.
+func TestDeleteTakesGrantsWithIt(t *testing.T) {
+	ctx := context.Background()
+	s := fresh(t)
+
+	if err := s.Append(ctx, agentloop.RunStep{
+		SessionID: "s1", StepType: "user", Content: "hi", ToolArgs: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := s.Grant(ctx, "s1", "Allow example.com?"); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+	if err := s.Delete(ctx, "s1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	granted, err := s.IsGranted(ctx, "s1", "Allow example.com?")
+	if err != nil {
+		t.Fatalf("IsGranted: %v", err)
+	}
+	if granted {
+		t.Error("a deleted session must not leave its approvals behind")
+	}
+}

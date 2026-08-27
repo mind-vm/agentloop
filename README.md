@@ -183,6 +183,29 @@ else the platform's per-user application directory — `--db` overrides
 all three. `--ephemeral` runs against in-memory stores instead and
 writes nothing, for a turn that should leave no trace.
 
+### Permission prompts
+
+Capabilities that need permission — today, `fetch` reaching a domain the
+policy has not already allowed — ask at the terminal:
+
+```
+Allow the agent to access example.com? [y/N]
+```
+
+`--approve` decides how those are answered: `prompt` asks, `auto`
+approves without asking, `deny` refuses without asking. The default
+depends on whether anyone is there to answer — `prompt` at a terminal,
+`deny` otherwise — so an unattended run fails closed rather than
+blocking forever on an answer nobody will give. Asking for `--approve
+prompt` with stdin redirected is an error rather than a silent
+downgrade.
+
+An approval is remembered for the rest of the session, including across
+invocations, so resuming does not re-ask. A *refusal* is deliberately
+not remembered: being asked twice is a smaller harm than a capability
+silently blocked forever. `agentloop sessions show <id>` lists what a
+session has approved and `agentloop sessions revoke <id>` forgets it.
+
 [`examples/cli`](examples/cli) stays as the minimal library demo — one
 `Run` call in 100 lines, which is the thing to read when embedding the
 engine rather than running it.

@@ -81,6 +81,15 @@ func cmdDoctor(argv []string) int {
 		}
 	}
 
+	d.section("Permissions")
+	d.info("approval mode", "%s", o.approval)
+	switch o.approval {
+	case approvalDeny:
+		d.info("", "capabilities that need permission will refuse — no terminal to ask at")
+	case approvalAuto:
+		d.warn("approval mode", "every permission request is granted without asking")
+	}
+
 	d.section("Sessions")
 	d.info("database", "%s", o.db)
 	if store, err := openStore(&o); err != nil {

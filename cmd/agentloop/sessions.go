@@ -55,8 +55,10 @@ func cmdSessions(argv []string) int {
 		return sessionsShow(ctx, store, &o, fs.Args())
 	case "rm", "remove", "delete":
 		return sessionsRemove(ctx, store, fs.Args())
+	case "revoke":
+		return sessionsRevoke(ctx, store, fs.Args())
 	default:
-		fmt.Fprintf(os.Stderr, "agentloop: unknown sessions command %q — try ls, show, or rm.\n", action)
+		fmt.Fprintf(os.Stderr, "agentloop: unknown sessions command %q — try ls, show, rm, or revoke.\n", action)
 		return exitUsage
 	}
 }
@@ -134,7 +136,45 @@ func sessionsShow(ctx context.Context, store *agentloopsql.Store, o *options, ar
 			s.StepType, s.StepIndex, s.CreatedAt.Local().Format("15:04:05"),
 			strings.TrimRight(s.Content, "\n"))
 	}
+
+	// What this session has been permitted is part of what it is — and
+	// the only way to notice an approval you would rather take back.
+	grants, err := store.Grants(ctx, id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentloop: %s\n", err)
+		return exitError
+	}
+	if len(grants) > 0 {
+		fmt.Printf("\n--- approved (%d) ---\n", len(grants))
+		for _, g := range grants {
+			fmt.Printf("  %s\n", g)
+		}
+		fmt.Fprintf(os.Stderr, "\nRun `agentloop sessions revoke %s` to forget these.\n", id)
+	}
 	return exitOK
+}
+
+func sessionsRevoke(ctx context.Context, store *agentloopsql.Store, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "agentloop: sessions revoke takes one or more session ids")
+		return exitUsage
+	}
+	code := exitOK
+	for _, id := range args {
+		grants, err := store.Grants(ctx, id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agentloop: %s\n", err)
+			code = exitError
+			continue
+		}
+		if err := store.Revoke(ctx, id); err != nil {
+			fmt.Fprintf(os.Stderr, "agentloop: %s\n", err)
+			code = exitError
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "· %s: forgot %d approval(s)\n", id, len(grants))
+	}
+	return code
 }
 
 func sessionsRemove(ctx context.Context, store *agentloopsql.Store, args []string) int {

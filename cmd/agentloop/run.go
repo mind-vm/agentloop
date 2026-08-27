@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -37,7 +38,11 @@ func cmdRun(argv []string) int {
 	}
 
 	r := newRenderer(&o, os.Stdout, os.Stderr)
-	sess, err := newSession(&o, warnTo(r))
+	// Any permission prompt this run raises is answered here. When the
+	// message itself came from stdin, that reader is already at EOF —
+	// which is the same situation as having no terminal, and resolves to
+	// the same refusal.
+	sess, err := newSession(&o, warnTo(r), bufio.NewReader(os.Stdin))
 	if err != nil {
 		r.fatal(err)
 		// A missing key or an unusable endpoint is an environment

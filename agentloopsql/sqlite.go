@@ -90,7 +90,7 @@ func Open(path string, clock func() time.Time) (*Store, error) {
 
 	enableWAL(db)
 
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + grantSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("agentloopsql: apply schema: %w", err)
 	}

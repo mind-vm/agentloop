@@ -40,7 +40,10 @@ func cmdChat(argv []string) int {
 	configureLogging(&o)
 
 	r := newRenderer(&o, os.Stdout, os.Stderr)
-	sess, err := newSession(&o, warnTo(r))
+	// One reader for both the conversation and any permission prompt a
+	// turn raises. Two would race for the same buffered bytes.
+	in := bufio.NewReader(os.Stdin)
+	sess, err := newSession(&o, warnTo(r), in)
 	if err != nil {
 		r.fatal(err)
 		return exitUsage
@@ -53,21 +56,17 @@ func cmdChat(argv []string) int {
 	}
 
 	last := exitOK
-	in := bufio.NewScanner(os.Stdin)
-	// A pasted message or a piped document can be far longer than the
-	// scanner's 64KB default line budget.
-	in.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-
 	for {
 		if interactive {
 			fmt.Fprint(os.Stderr, "\n› ")
 		}
-		if !in.Scan() {
+		// ReadString rather than a Scanner: it shares the reader with the
+		// permission prompter, and it has no line-length ceiling, so a
+		// pasted document arrives as one message.
+		line, err := in.ReadString('\n')
+		message := strings.TrimSpace(line)
+		if err != nil && message == "" {
 			break
-		}
-		message := strings.TrimSpace(in.Text())
-		if message == "" {
-			continue
 		}
 		if done, code := chatCommand(message, sess, interactive); done {
 			if code >= 0 {
@@ -76,10 +75,6 @@ func cmdChat(argv []string) int {
 			continue
 		}
 		last = chatTurn(sess, r, message)
-	}
-	if err := in.Err(); err != nil {
-		r.fatal(fmt.Errorf("cannot read stdin: %w", err))
-		return exitError
 	}
 	if interactive {
 		fmt.Fprintln(os.Stderr)

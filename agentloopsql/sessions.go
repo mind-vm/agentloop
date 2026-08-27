@@ -108,10 +108,15 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("agentloopsql: delete session %s: %w", id, err)
 	}
-	// Steps are deleted regardless: a trace whose session row is already
-	// gone is orphaned, and leaving it would keep the file growing.
+	// Steps and grants are deleted regardless: rows whose session is
+	// already gone are orphaned, and a stale grant is worse than
+	// orphaned — it would silently pre-approve a later session that
+	// happened to reuse the id.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM steps WHERE session_id = ?`, id); err != nil {
 		return fmt.Errorf("agentloopsql: delete steps for %s: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_grants WHERE session_id = ?`, id); err != nil {
+		return fmt.Errorf("agentloopsql: delete grants for %s: %w", id, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("agentloopsql: delete session %s: %w", id, err)

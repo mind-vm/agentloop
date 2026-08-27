@@ -102,6 +102,7 @@ USAGE
   agentloop sessions ls           list stored sessions
   agentloop sessions show <id>    print a session's trace
   agentloop sessions rm <id>...   delete stored sessions
+  agentloop sessions revoke <id>  forget a session's approvals
   agentloop doctor [flags]        check the environment and workspace
   agentloop version               print version information
   agentloop help                  print this message
@@ -122,6 +123,8 @@ FLAGS
   --json                  emit newline-delimited JSON events on stdout
   --json-stream           in --json mode, also emit response_chunk events
   --quiet                 suppress the live activity stream on stderr
+  --approve mode          answer permission prompts: prompt, auto, or deny
+                          (default: prompt at a terminal, deny otherwise)
 
 ENVIRONMENT
   OPENAI_API_KEY          required
