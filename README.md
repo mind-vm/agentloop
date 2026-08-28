@@ -200,6 +200,22 @@ A failed request is retried up to three times by default — set
   came from, no user-global file is read unless you ask for one
   (`Loader{GlobalDir: ...}`) — a library shouldn't reach into `$HOME` on
   its own.
+
+  `Render` inlines every file in full, which is a *standing* cost —
+  these ride in the prompt of every turn of every run, whether or not
+  the turn touches anything they cover. `projectctx.RenderCatalog(docs)`
+  plus `projectctx.Capabilities(docs)` is the retrieval alternative: the
+  prompt carries each file's opening section (`Loader.InlineBytes`,
+  4 KB by default, cut at a paragraph boundary and never left dangling
+  on a heading), and the model pulls the rest with `projectGet(name)`
+  when it needs it — `projectList()` reports each file's size and
+  whether the prompt already has all of it. A typical page-or-two
+  AGENTS.md rides along whole and nothing changes; a 36 KB one drops
+  from ~9,300 to ~1,200 prompt tokens per turn, with nothing lost —
+  unlike `MaxBytes` truncation, the tail stays reachable. The two are
+  alternatives, not a pair: `RenderCatalog` writes pointers to
+  `projectGet`, so wire the capabilities alongside it. See
+  `examples/cli`.
 - **Project skills** — `skills.Load(cwd)` reads
   `<root>/.agentloop/skills/<name>/SKILL.md` (directory configurable) and
   `skills.Capabilities(sk)` turns them into capabilities to append to
