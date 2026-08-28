@@ -58,12 +58,13 @@ type DefaultPolicy struct {
 	// "secret"). Empty means all of them are denied.
 	AllowTools []string
 
-	// URLAllowPrefixes is the outbound allowlist for fetch/http,
-	// matched by prefix (same semantics as URLAllowlistPolicy). Empty
-	// means public URLs are allowed (the fetch pack's per-domain user
-	// approval still applies); non-empty means only matching URLs are.
-	// An explicit prefix also overrides the private-network denial —
-	// listing an internal URL is a conscious decision.
+	// URLAllowPrefixes is the outbound allowlist for fetch/http and for
+	// browser navigation, matched by prefix (same semantics as
+	// URLAllowlistPolicy). Empty means public URLs are allowed (the
+	// fetch pack's per-domain user approval still applies); non-empty
+	// means only matching URLs are. An explicit prefix also overrides
+	// the private-network denial — listing an internal URL is a
+	// conscious decision.
 	URLAllowPrefixes []string
 
 	// AllowCommands grants exec() for these command basenames, e.g.
@@ -86,7 +87,7 @@ type DefaultPolicy struct {
 // Check implements PolicyChecker.
 func (p DefaultPolicy) Check(_ context.Context, toolName string, args map[string]any) (PolicyCheckResult, error) {
 	switch toolName {
-	case "fetch", "http", "_http":
+	case "fetch", "http", "_http", "browser":
 		return p.checkURL(args)
 	case "exec":
 		if command, _ := args["command"].(string); command != "" &&

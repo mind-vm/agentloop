@@ -58,6 +58,17 @@ is kept verbatim) and large data never appears in the context window twice.
   `OpenAPIPack`) a parsed spec, same decoupling the core packs use, so
   this package stays free of any mail/secrets/search-backend/HTTP-client
   dependency of its own.
+- **`browser`** — a `browser` global that drives a real browser:
+  `goto` / `click` / `type` / `text` against CSS selectors, plus
+  Set-of-Marks, where `mark()` numbers every visible interactive
+  element and returns `{id, tag, role, name, x, y, w, h}` for each so
+  the model acts by id (`clickMark(3)`) rather than by inventing a
+  selector or a pixel coordinate. Optional vision (`ask` / `askMarks`)
+  arrives as a callback, same decoupling `ext` uses. Every primitive
+  goes through a ten-method `Driver`; the chromedp implementation is
+  a *separate module*, `github.com/mind-vm/agentloop/browser/chrome`,
+  so chromedp and cdproto stay off the dependency list of every
+  deployment that never opens a browser.
 - **`pool`** — `SandboxPool`, a `SandboxBuilder` that reuses one
   long-lived sandbox per session across every `Run` instead of paying
   `goja.New()` + pack-registration cost on every message. Wraps any

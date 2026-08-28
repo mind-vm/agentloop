@@ -548,10 +548,10 @@ func autoReturn(code string) string {
 // can't be auto-returned. Conservative on purpose — when in doubt
 // don't prepend `return`, because invalid JS aborts the whole run.
 func isStatement(line string) bool {
-	// Multi-statement line (semicolon not at end) — too risky to
-	// auto-return.
+	// Multi-statement line (a semicolon that isn't the trailing one) —
+	// too risky to auto-return.
 	stripped := strings.TrimRight(line, "; \t")
-	if strings.Contains(stripped, ";") {
+	if hasTopLevelSemicolon(stripped) {
 		return true
 	}
 
@@ -566,6 +566,13 @@ func isStatement(line string) bool {
 		"try ", "try{",
 		"function ", "class ",
 		"throw ", "break", "continue",
+		// Continuations of a block that opened on an earlier line. A
+		// closing brace in front of them (`} else {`) is caught below,
+		// but they also appear at the start of a line, and the
+		// semicolon check no longer covers them now that it ignores
+		// semicolons nested in braces.
+		"else ", "else{", "finally ", "finally{",
+		"case ", "default:",
 	}
 	for _, p := range prefixes {
 		if strings.HasPrefix(line, p) {
@@ -580,6 +587,88 @@ func isStatement(line string) bool {
 		return true
 	}
 	return false
+}
+
+// hasTopLevelSemicolon reports whether line holds a semicolon that
+// actually separates two statements, as opposed to one nested inside
+// brackets (a function body, a `for` header, an object literal), inside
+// a string or template literal, or inside a comment.
+//
+// The distinction is what lets isStatement tell one expression from two
+// statements. `marks.map(function (m) { return m.id; })` is a single
+// expression whose value is worth returning; a plain search for ";"
+// reads it as two statements and silently drops the result.
+//
+// Two things are deliberately not tracked. Regular-expression literals
+// need the parser's context to tell `/` from division, and a regex
+// holding a semicolon is rare. `${...}` inside a template literal is
+// treated as part of the string rather than as code. Both fall back to
+// reporting a statement, which is the conservative answer: the caller
+// then declines to auto-return, costing a return value rather than
+// producing invalid JS.
+func hasTopLevelSemicolon(line string) bool {
+	depth := 0
+	for i := 0; i < len(line); i++ {
+		switch c := line[i]; c {
+		case '\'', '"', '`':
+			end := endOfString(line, i)
+			if end < 0 {
+				// Unterminated: the expression continues on another
+				// line and this one can't be returned on its own.
+				return true
+			}
+			i = end
+
+		case '/':
+			if i+1 >= len(line) {
+				continue
+			}
+			switch line[i+1] {
+			case '/':
+				// Line comment — nothing after it is code.
+				return false
+			case '*':
+				end := strings.Index(line[i+2:], "*/")
+				if end < 0 {
+					return true
+				}
+				i += 2 + end + 1
+			}
+
+		case '(', '[', '{':
+			depth++
+
+		case ')', ']', '}':
+			// Floor at zero: a line may close a bracket it never
+			// opened, and a negative depth would misread every
+			// semicolon after it.
+			if depth > 0 {
+				depth--
+			}
+
+		case ';':
+			if depth == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// endOfString returns the index of the quote that closes the string
+// literal opening at start, or -1 if the line ends first. Escapes are
+// honoured, so "a\";b" is one string and not a statement break.
+func endOfString(line string, start int) int {
+	quote := line[start]
+	for i := start + 1; i < len(line); i++ {
+		switch line[i] {
+		case '\\':
+			i++
+		case quote:
+			return i
+		}
+	}
+	return -1
 }
 
 // Logs returns the captured log entries from the last Execute call.

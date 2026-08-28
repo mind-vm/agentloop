@@ -21,6 +21,9 @@ const (
 	EventWebSearch EventKind = "web_search"
 	// EventFetch is an outbound HTTP request via fetch() / require('http').
 	EventFetch EventKind = "fetch"
+	// EventBrowser is a browser-automation step — a navigation, a click,
+	// a Set-of-Marks pass — from the browser package's pack.
+	EventBrowser EventKind = "browser"
 	// EventMemory historically fired on memory ops; today it's reused
 	// for secret reads. Kept named "memory" so existing trace consumers
 	// don't break.

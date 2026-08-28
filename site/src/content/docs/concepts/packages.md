@@ -74,6 +74,26 @@ extension packs](/extending/#optional-extension-packs) and
 [Extending → Generating a skill from an OpenAPI
 spec](/extending/#generating-a-skill-from-an-openapi-spec).
 
+## `browser`
+
+A `browser` global that drives a real browser: `goto` / `click` / `type` /
+`text` against CSS selectors, plus Set-of-Marks — `mark()` numbers every
+visible interactive element and returns `{id, tag, role, name, x, y, w, h}`
+for each, so the model acts by id (`clickMark(3)`) instead of inventing a
+selector or a pixel coordinate. Optional vision (`ask` / `askMarks`) is a
+callback, so the package pulls in no model client.
+
+Everything here talks to a ten-method `Driver`. The chromedp
+implementation is a **separate module**,
+`github.com/mind-vm/agentloop/browser/chrome`, so that chromedp and cdproto
+stay off the dependency list of every deployment that never opens a
+browser. Navigation is policy-gated under tool name `browser` — the same
+URL rules `DefaultPolicy` applies to `fetch`.
+
+```bash
+go get github.com/mind-vm/agentloop/browser/chrome
+```
+
 ## `projectctx`
 
 Discovers project instruction files — `AGENTS.md` and friends — from the
