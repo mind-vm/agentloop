@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mind-vm/agentloop"
 	"github.com/mind-vm/agentloop/sandbox"
 )
 
@@ -327,4 +328,16 @@ func tail(s string, n int) string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+// agentloop.Profile derives an InlineBytes for this package but cannot
+// import it — projectctx depends on agentloop, not the other way — so
+// it mirrors the constant instead. This is the pin: the mirror is only
+// safe while the two agree.
+func TestProfileInlineCeilingMatchesTheDefault(t *testing.T) {
+	p := agentloop.ProfileFor(1_000_000) // large enough to hit the ceiling
+	if p.ProjectInlineBytes != DefaultInlineBytes {
+		t.Fatalf("agentloop.Profile caps ProjectInlineBytes at %d, but DefaultInlineBytes is %d — update the mirrored constant in profile.go",
+			p.ProjectInlineBytes, DefaultInlineBytes)
+	}
 }

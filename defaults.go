@@ -75,6 +75,15 @@ type DefaultSandboxBuilder struct {
 	// EnabledCapabilities is the allowlist passed through to every
 	// capability's BuildContext. nil means "all enabled".
 	EnabledCapabilities *[]string
+
+	// MaxLogBytes caps one turn's log() output. Zero uses
+	// sandbox.DefaultMaxLogBytes; negative removes the cap.
+	//
+	// Worth lowering for a small context window: a turn's logs are
+	// replayed in every later prompt of the session, so this is a
+	// per-turn cost that compounds. Profile.MaxLogBytes derives a value
+	// from a model's window.
+	MaxLogBytes int
 }
 
 // Build implements SandboxBuilder. A capability whose Build fails is
@@ -120,6 +129,7 @@ func (b *DefaultSandboxBuilder) Build(ctx context.Context, sess Session, scope S
 
 	sb := sandbox.New(packs...)
 	sb.SetOnEvent(onEvent)
+	sb.SetMaxLogBytes(b.MaxLogBytes)
 	return sb, func() {}, nil
 }
 

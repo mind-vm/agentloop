@@ -199,6 +199,52 @@ A failed request is retried up to three times by default — set
   This is a backstop, not a replacement for compaction: the compactor
   preserves meaning, the budget only guarantees the request is sendable.
   Configure both.
+- **Small-model profile** — a model's context window sets four limits
+  this package exposes as separate knobs in three different units:
+  `ContextBudget` in tokens, `HistoryWindow` in steps, the compactor's
+  `Trigger`/`Keep` in messages, log output in bytes. Every default
+  assumes a frontier model, so against an 8k local model they are wrong
+  by an order of magnitude — and fixing that by hand means four unit
+  conversions from one number you already know.
+  `agentloop.ProfileFor(window)` is that number expanded:
+
+  ```go
+  p := agentloop.ProfileFor(8192)
+  docs, _ := projectctx.Loader{InlineBytes: p.ProjectInlineBytes}.Load(cwd)
+  cfg := agentloop.Config{
+      LLM: client, Sessions: sessions, Steps: steps,
+      SandboxBuilder: &agentloop.DefaultSandboxBuilder{
+          Capabilities: caps,
+          MaxLogBytes:  p.MaxLogBytes,
+      },
+      Compactor: &agentloop.SummarizingCompactor{LLM: client},
+  }
+  p.Apply(&cfg) // ContextBudget, HistoryWindow, and the compactor's knobs
+  ```
+
+  | window | history | trigger/keep | log bytes | AGENTS.md inline |
+  |---|---|---|---|---|
+  | 4k | 42 | 14/4 | 1,792 | 1,792 |
+  | 8k | 84 | 28/9 | 3,584 | 3,584 |
+  | 32k | 180 | 60/20 | 14,336 | 4,096 |
+  | 128k+ | 180 | 60/20 | 16,384 | 4,096 |
+
+  At a large window it lands on the package defaults, so adopting it
+  changes nothing for a hosted model. `ProfileFor(0)` returns a zero
+  `Profile` whose `Apply` is a no-op — "I don't know the window"
+  degrades to the defaults rather than to a guess. It is a starting
+  point, not a constraint: read the fields and override what your
+  workload justifies. `Apply` leaves a custom `Compactor` alone (its
+  knobs are its own) and never touches the sandbox builder or the
+  project-instruction loader, which are separate objects you construct.
+
+  The remaining lever it can't pull for you is **how many packs you
+  register**: `DefaultCapabilities` costs ~1,300 prompt tokens of
+  `declare` lines on every turn, and the `ext/` packs (especially
+  OpenAPI-generated ones) add more. On a small window, dropping
+  capabilities a given agent never uses is often the largest single
+  saving available — `DefaultSandboxBuilder.EnabledCapabilities` is the
+  per-session allowlist for that.
 - **Project instructions** — `projectctx.Load(cwd)` walks from the
   repository root down to `cwd` collecting `AGENTS.md` files (general
   first, most specific last), and `projectctx.Render(docs)` turns them
