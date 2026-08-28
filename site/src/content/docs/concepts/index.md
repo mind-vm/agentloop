@@ -47,8 +47,16 @@ twice.
 A long-running agent that kept every turn's script verbatim in history would
 grow its prompt linearly with turn count. agentloop elides stale code: only
 the most recent turn's script is kept verbatim in the conversation sent to
-the model; earlier turns are summarised. Combined with structural-digest
-threading, this is what keeps many-step runs affordable.
+the model; earlier ones are replaced by a one-line marker, since their effect
+already lives in `args` and their observations in the logs. Combined with
+structural-digest threading, this is what keeps many-step runs affordable.
+
+Neither mechanism bounds the conversation itself, though. For that there are
+four explicit limits — a token budget, chunked compaction, on-demand project
+instructions, and a per-turn log cap — plus one profile that derives all of
+them from a model's context window. See [Fitting a session in the context
+window](/concepts/context/), which matters most if you're pointing agentloop
+at a locally hosted model.
 
 ## Where this stops
 
@@ -60,7 +68,8 @@ limitations](/reference/#known-limitations) for the full list.
 
 ## Next
 
-- [Packages](/concepts/packages/) — what each of the five packages
-  is responsible for.
+- [Packages](/concepts/packages/) — what each package is responsible for.
+- [Fitting a session in the context window](/concepts/context/) — the
+  bounds that keep a long session inside a model's window.
 - [Extending agentloop](/extending/) — capabilities, sandbox
   composition, stores, and policy.
