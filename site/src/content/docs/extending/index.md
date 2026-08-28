@@ -382,7 +382,7 @@ safe. The complete, redacted text still arrives via the terminal
 
 ## Next
 
-[Reference](/agentloop/reference/) has the full list of known limitations —
+[Reference](/reference/) has the full list of known limitations —
 worth reading before extending agentloop into a production path, since
 several of them (no durable execution, no built-in cost ceiling) are things
 an application built on top has to supply itself.

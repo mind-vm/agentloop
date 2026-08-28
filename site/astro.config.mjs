@@ -3,6 +3,7 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import tailwindcss from "@tailwindcss/vite";
 
+import { rehypeBaseLinks } from "./rehype-base-links.mjs";
 import { base, site } from "./site.config.mjs";
 
 // Every page under src/content/docs is hand-written — there is no docs/
@@ -79,6 +80,13 @@ export default defineConfig({
       ],
     }),
   ],
+  // Content links are written without the deployment prefix — `/concepts/`,
+  // not `/agentloop/concepts/` — and this adds it at build time from the one
+  // place `base` is defined. See rehype-base-links.mjs for what it does and
+  // does not cover.
+  markdown: {
+    rehypePlugins: [rehypeBaseLinks],
+  },
   // Tailwind v4 is a Vite plugin, not an Astro integration — there is no
   // @astrojs/tailwind package to add to `integrations` any more. It scans the
   // project for class names itself, so there is no content globbing to keep

@@ -56,11 +56,11 @@ agentloop is a synchronous, single-process design. There's no
 `Promise`/`async`/`.then()` support in the sandbox — goja parses the syntax
 but has no event loop, so a continuation would silently never run, and the
 system prompt warns the model off writing one. See [known
-limitations](/agentloop/reference/#known-limitations) for the full list.
+limitations](/reference/#known-limitations) for the full list.
 
 ## Next
 
-- [Packages](/agentloop/concepts/packages/) — what each of the five packages
+- [Packages](/concepts/packages/) — what each of the five packages
   is responsible for.
-- [Extending agentloop](/agentloop/extending/) — capabilities, sandbox
+- [Extending agentloop](/extending/) — capabilities, sandbox
   composition, stores, and policy.

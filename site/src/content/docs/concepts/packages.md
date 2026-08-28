@@ -34,7 +34,7 @@ The goja-based JS executor and its built-in packs:
 | skill discovery | `skillList()` / `skillGet()` — introspects the union of loaded packs |
 
 A `PolicyChecker` seam gates side-effecting primitives (`fetch`, `ai`, or
-your own) per call — see [Policy](/agentloop/extending/#policy).
+your own) per call — see [Policy](/extending/#policy).
 
 ## `llm`
 
@@ -65,9 +65,9 @@ core sandbox package: `EmailPack` (`sendEmail`), `SecretPack` (`secret`),
 and `OpenAPIPack`, which generates a whole `require()`-able skill — one JS
 function per operation — from an OpenAPI 3 document. Not part of
 `DefaultCapabilities` — wire in the ones you need. See [Extending → Optional
-extension packs](/agentloop/extending/#optional-extension-packs) and
+extension packs](/extending/#optional-extension-packs) and
 [Extending → Generating a skill from an OpenAPI
-spec](/agentloop/extending/#generating-a-skill-from-an-openapi-spec).
+spec](/extending/#generating-a-skill-from-an-openapi-spec).
 
 ## `pool`
 
@@ -75,7 +75,7 @@ spec](/agentloop/extending/#generating-a-skill-from-an-openapi-spec).
 session across every `Run` instead of building a fresh one — a whole
 `goja.Runtime` plus every pack's registration — on every message. Wraps any
 other `SandboxBuilder`. See [Extending → Session-scoped sandbox
-reuse](/agentloop/extending/#session-scoped-sandbox-reuse) for the
+reuse](/extending/#session-scoped-sandbox-reuse) for the
 correctness problem it has to solve to do that safely.
 
 ## `eval`
@@ -84,7 +84,7 @@ An LLM-judged eval harness: a `Suite` of `Case`s (input + judge criteria),
 each dispatched through an `agentloop.Loop` and scored 0–10 by a judge
 `llm.Client`. `Loop`'s own `Run` method already has exactly the shape a
 runner needs, so `Service` takes one directly — no adapter interface. See
-[Evaluating agent quality](/agentloop/extending/#evaluating-agent-quality).
+[Evaluating agent quality](/extending/#evaluating-agent-quality).
 
 ## `evalmem`
 
@@ -98,9 +98,9 @@ strips every occurrence out of text or bytes. A nil `*Redactor` is a safe
 pass-through everywhere it's used, so it's entirely opt-in — build one
 with `redact.FromSecrets(...)` and hand it to `Config.Redactor` or
 `eval.NewService`. See [Redacting secrets from
-observability](/agentloop/extending/#redacting-secrets-from-observability).
+observability](/extending/#redacting-secrets-from-observability).
 
 ## Next
 
-[Extending agentloop](/agentloop/extending/) covers the seams — capabilities,
+[Extending agentloop](/extending/) covers the seams — capabilities,
 `SandboxBuilder`, stores, and policy — in more depth.

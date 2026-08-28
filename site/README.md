@@ -51,11 +51,16 @@ Retheme the site by overriding `--color-accent-*` / `--color-gray-*` in an
 ## Deployment
 
 `site.config.mjs` holds `site` and `base`, currently set for a GitHub Pages
-project site at `/agentloop`. `astro.config.mjs` reads it to configure Astro;
-Starlight prefixes its own navigation links automatically, but a handful of
-links written out in full in `index.mdx` (the hero `link:` values, which are
-frontmatter and not touched by Starlight's base-prefixing) repeat the prefix
-and would need updating by hand if `base` ever changes.
+project site at `/agentloop`. Changing `base` there is the whole job — no
+content repeats the prefix, so there is nothing to grep for afterwards.
+
+Links in content are written **without** the deployment prefix —
+`[Concepts](/concepts/)`, the path as it would be at the site root — and
+`rehype-base-links.mjs` adds the prefix at build time. Two cases sit outside
+that plugin: MDX that builds hrefs in JavaScript rather than Markdown
+(`404.mdx`) imports `base` directly, and the hero actions in `index.mdx` are
+relative (`start/`) because YAML frontmatter cannot import and Starlight does
+not prefix hero links itself.
 
 `.github/workflows/pages.yml` builds and deploys on a push to `main` that
 touches `site/**`, and on `workflow_dispatch`.
