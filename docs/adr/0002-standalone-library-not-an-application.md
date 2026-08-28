@@ -4,9 +4,10 @@
 - **Confidence:** High
 - **Decided:** 2026-08-21
 - **Last reviewed:** 2026-08-28
-- **Consumers:** none in production yet — and that is the honest state. The
-  ancestors (`studio-apps/core/agentloop`, mybrain) still run their own in-tree
-  copies. This repository is the version meant to be depended on from outside.
+- **Consumers:** `cmd/agentloop`, the CLI in this repository — the first real
+  one, and in-tree rather than external. The ancestors
+  (`studio-apps/core/agentloop`, mybrain) still run their own copies, so the
+  duplication this record set out to end has not ended yet.
 
 ## Context
 
@@ -54,6 +55,9 @@ implemented by an outsider.
 **Costs.** The forks did not disappear when this was published. Until they adopt
 it, a fix here reaches nothing and the count of copies has gone *up*, not down.
 That is the central risk of this record and the thing to check first at review.
+`cmd/agentloop` blunts it without removing it: an in-tree CLI proves the seams
+compose from outside the root package, but it cannot prove they compose for
+someone who does not control the library.
 
 ## What would change our mind
 
@@ -78,3 +82,6 @@ and it has already been renamed once (`jryannel` → `mind-vm`, 2026-08-25).
 - 2026-08-25 — Module path moved from `github.com/jryannel/agentloop` to
   `github.com/mind-vm/agentloop`.
 - 2026-08-28 — Recorded retroactively.
+- 2026-08-28 — `cmd/agentloop` shipped with a release pipeline, giving the
+  library its first consumer and the *Consumers* line something other than
+  "none".

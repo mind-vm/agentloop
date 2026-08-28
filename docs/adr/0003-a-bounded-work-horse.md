@@ -61,13 +61,19 @@ stress on an agent loop is.
 
 ## What would change our mind
 
-- **This is already under challenge.** studio-apps
-  ADR-0049 (`docs/adr/0049-coding-agent-cli-as-agentloop-hardening-vehicle.md`)
-  proposes a coding-agent CLI on top of this loop *as a hardening vehicle*, on
-  the argument that repository work is the most punishing consumer available and
-  the context economy should compound harder there, not less. If that lands and
-  works, §11's third boundary is wrong and this record needs rewriting rather
-  than defending. That is why the status is `Revisiting` and not `Working`.
+- **This is no longer hypothetical — it has already happened here.**
+  studio-apps ADR-0049
+  (`docs/adr/0049-coding-agent-cli-as-agentloop-hardening-vehicle.md`) proposed
+  a coding-agent CLI on top of this loop *as a hardening vehicle*, arguing that
+  repository work is the most punishing consumer available and that the context
+  economy should compound harder there, not less. This repository now ships
+  `cmd/agentloop` with `ext.ExecPack` (run commands) and filesystem packs — an
+  agent that reads and changes a workspace, which is precisely the open-ended
+  work §11's third boundary excludes. The boundary was crossed before it was
+  ever written down here. What is still unresolved is whether it *works*: no
+  eval yet says whether the harness holds up on repository work or degrades the
+  way §11 predicts. Until it does, this record is `Revisiting` and the boundary
+  should be treated as an open question, not as a rule to enforce.
 - **Composition turns out to be rare in practice.** If real consumers write
   single-primitive scripts, they are paying sandbox overhead for nothing and
   should be using function calling.
@@ -90,3 +96,8 @@ bend first.
 - 2026-08-26 — Challenged by studio-apps ADR-0049, which proposes the coding
   agent this record excludes.
 - 2026-08-28 — Recorded here retroactively, as `Revisiting` because of the above.
+- 2026-08-28 — Overtaken the same day: `cmd/agentloop`, `ext.ExecPack` and the
+  filesystem packs make this repository the coding agent ADR-0049 proposed. The
+  boundary in §11 now describes an intention the code has already left behind,
+  which is the strongest possible reason to leave the record open rather than
+  quietly delete the boundary.

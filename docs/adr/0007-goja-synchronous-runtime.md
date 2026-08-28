@@ -86,3 +86,9 @@ prompt states most emphatically.
 - 2026-07-05 — The three costs assessed in `core/agentloop/ASSESSMENT.md`, which
   names durability the #1 gap.
 - 2026-08-28 — Recorded here retroactively.
+- 2026-08-28 — `agentloopsql` landed, and it is worth being precise about what
+  it does *not* fix: durable **storage** for sessions and steps is not durable
+  **execution**. A restart still kills a run in flight, and README's *Known
+  limitations* still says so. What it does change is the cost of the fix — the
+  persistence layer a suspend/resume seam would write into now exists, so the
+  remaining work is the turn-boundary checkpoint, not the store beneath it.

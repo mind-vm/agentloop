@@ -55,19 +55,26 @@ which is the only thing that scales past the second implementation. And
 and relies on the documented auto-create.
 
 **Costs.** Every consumer writes ~150 lines of store code, and the ancestors
-show they will be near-identical (studio-apps eventually extracted a shared
-Postgres store for exactly this reason). There is no `SessionStoreContract` yet
-— only steps are covered — so the interface with the subtler contract is the one
-without a harness.
+show they will be near-identical — studio-apps eventually extracted a shared
+Postgres store for exactly this reason, and `agentloopsql` is this repository
+conceding the same point.
 
 ## What would change our mind
 
-- **A second consumer ships a near-identical Postgres store.** That is the cue
-  for a reference implementation in a sibling package, opt-in like everything
-  else.
+- **This already fired once.** The trigger was "a second consumer ships a
+  near-identical store"; `agentloopsql` is the reference implementation it
+  called for, opt-in in a sibling package like everything else. The remaining
+  question is whether a *Postgres* one follows, and if it does, whether the two
+  share anything but the contract tests.
 - **A conformance failure is found in the field rather than by the kit.** Then
-  the kit is under-specified; extend it and add the `SessionStore` half, which
-  is the known gap.
+  the kit is under-specified. Both halves exist now, so a field failure is
+  evidence about the tests, not about coverage.
+- **A third store appears with a fourth ordering rule.** `agentloopsql` orders
+  by insertion rather than `StepIndex`, because the loop restarts numbering once
+  a session outgrows its history window. That is a real contract detail the
+  interface does not state; a third implementation getting it wrong means it
+  belongs in `LastN`'s doc comment and in the harness, not in one store's
+  package doc.
 
 ## Cost of change
 
@@ -83,4 +90,10 @@ costs nobody anything.
 - 2026-08-21 — `agentloopmem` and `agentlooptest` ported alongside the
   extraction.
 - 2026-08-28 — Recorded here retroactively. Doing so surfaced that
-  `SessionStore` has no conformance harness.
+  `SessionStore` had no conformance harness.
+- 2026-08-28 — **That gap is closed and the record was wrong within the day.**
+  `agentlooptest.SessionStoreContract` now exists alongside the step harness,
+  and `agentloopsql` — a SQLite `SessionStore` + `StepStore` on the pure-Go
+  `modernc.org/sqlite` driver, so an embedding binary still cross-compiles —
+  runs both. The library now ships the durable reference store this record
+  argued it should not have to.

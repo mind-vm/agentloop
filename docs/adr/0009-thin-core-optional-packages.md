@@ -25,17 +25,24 @@ The root package holds the loop and its seams. Everything else is a sibling
 package the caller opts into by importing it.
 
 - **`ext`** — packs that are common but not universal (`EmailPack`,
-  `SecretPack`, `SearchPack`, `StoresPack`, `OpenAPIPack`). Each takes a
-  callback or small interface, so the package carries no mail, secrets, search
-  or HTTP-client dependency of its own.
+  `SecretPack`, `SearchPack`, `StoresPack`, `OpenAPIPack`, and the host-reaching
+  `ExecPack`/filesystem packs). Each takes a callback, a small interface or an
+  `*os.Root`, so the package carries no mail, secrets, search or HTTP-client
+  dependency of its own. `AGENTS.md` states the rule this enforces: **the core
+  cannot touch the host**, and anything reaching files, commands, mail or
+  secrets lives out here where a caller has to ask for it.
 - **`projectctx`, `skills`** — layered capabilities that read a checkout on
   disk. **Nothing in the core imports them**; an application opts in by passing
   `projectctx.Render(docs)` as `RunRequest.Context` and appending
   `skills.Capabilities(sk)` to its slice.
 - **`pool`** — a `SandboxBuilder` decorator, so reuse is a wrapper rather than a
   mode in the core.
-- **`eval` / `evalmem`, `agentloopmem`, `agentlooptest`, `redact`** — testing,
-  storage and hygiene, each usable alone.
+- **`eval` / `evalmem`, `agentloopmem`, `agentloopsql`, `agentlooptest`,
+  `redact`** — testing, storage and hygiene, each usable alone.
+  `agentloopsql` is deliberately on a pure-Go SQLite driver, so depending on it
+  does not cost a consumer cgo.
+- **`cmd/agentloop`** — the CLI. It is a *consumer* of the packages above, not a
+  package they may import; nothing in the library depends on it.
 - **The extension points are uniform**: `Capability`, `SandboxBuilder`,
   `PolicyChecker`, `Compactor`, `Redactor`, `TracerProvider`. All are interfaces
   or funcs the caller supplies, and every one is a no-op when unset.
@@ -77,3 +84,6 @@ direction that cannot be undone without a breaking release.
 - 2026-08-26/27 — `projectctx` and `skills` added, both explicitly unimported by
   the core.
 - 2026-08-28 — Recorded retroactively.
+- 2026-08-28 — `agentloopsql`, `cmd/agentloop` and the host-reaching `ext` packs
+  landed, all as siblings; `AGENTS.md` now states the core-cannot-touch-the-host
+  rule this record's layering exists to serve.
