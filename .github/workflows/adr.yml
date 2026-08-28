@@ -1,0 +1,137 @@
+# Keep the architecture decision records honest.
+#
+# docs/adr/adr_test.go already runs inside `go test ./...` and covers everything
+# a single checkout can see: headers, vocabulary, index drift, impossible dates.
+# This workflow adds the two checks that need history or a place to report.
+#
+# Deliberately not filtered to docs/adr. A required check that skips itself
+# reports "pending" forever and gets overridden by hand, which trains people to
+# override it — the same reasoning as the note at the top of ci.yml. Both jobs
+# finish in seconds.
+name: adr
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Monday morning. The review horizon is the one check nothing else will
+    # surface on its own: records go stale while nobody touches them, which is
+    # exactly when no push is happening to notice.
+    - cron: "0 8 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A record edited without moving its Last reviewed date is the failure this
+  # repository actually hit: main moved fourteen commits under a set of records
+  # written the same day, and several of them stated things the code had already
+  # contradicted. Bumping the date is the cheap half of noticing.
+  review-date-bumped:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Both refs must be present to diff them; a shallow clone has neither.
+          fetch-depth: 0
+
+      - name: Determine the base commit
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Every edited record carries a current Last reviewed date
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          # A force-push or an initial push leaves no usable base. Nothing to
+          # compare against is not a violation.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "No usable base commit ($BASE) — skipping."
+            exit 0
+          fi
+
+          # The rule is "current as of this change", not "different from before".
+          # Requiring the date to CHANGE is unsatisfiable when a record is edited
+          # on the day it was already reviewed: the correct value is today's date,
+          # which is what it already says. Comparing against the change's own date
+          # accepts that and still catches a record dragged along by an edit while
+          # its date stays months behind.
+          changed_on="$(git show -s --format=%ad --date=short HEAD)"
+
+          stale=""
+          # Records only. README.md and 0000-template.md carry no review date.
+          while read -r f; do
+            case "$f" in
+              docs/adr/0000-template.md) continue ;;
+              docs/adr/[0-9][0-9][0-9][0-9]-*.md) ;;
+              *) continue ;;
+            esac
+
+            reviewed="$(git show "HEAD:$f" | sed -n 's/^- \*\*Last reviewed:\*\* *//p' | head -1)"
+            if [ -z "$reviewed" ]; then
+              stale="$stale  $f — no Last reviewed date at all"$'\n'
+            elif [ "$reviewed" \< "$changed_on" ]; then
+              stale="$stale  $f — reviewed $reviewed, edited $changed_on"$'\n'
+            fi
+          done < <(git diff --name-only "$BASE" HEAD -- docs/adr/)
+
+          if [ -n "$stale" ]; then
+            echo "These records were edited but their Last reviewed date is older than the edit:"
+            echo ""
+            printf '%s' "$stale"
+            echo ""
+            echo "Editing a record means you read it. Set Last reviewed to $changed_on"
+            echo "if it still holds, and fix it if it does not."
+            exit 1
+          fi
+          echo "Every edited record carries a current Last reviewed date."
+
+  # Report, never block. Staleness is a judgement about whether a record is
+  # still true, and only a person reading it can make that call; failing
+  # unrelated pull requests on a calendar is how a check gets disabled.
+  review-horizon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Records past the review horizon
+        run: |
+          set -euo pipefail
+          # Reuses the horizon and the date parsing in adr_test.go rather than
+          # reimplementing them in shell, so there is one definition of "stale".
+          out="$(go test ./docs/adr/ -run TestReviewHorizon -v | grep -F 'was last reviewed' || true)"
+
+          {
+            echo "## ADR review horizon"
+            echo ""
+            if [ -z "$out" ]; then
+              echo "Every record is within the horizon."
+            else
+              echo "These records are due a read. Bump the date if one still reads true; fix it if not."
+              echo ""
+              echo '```'
+              printf '%s\n' "$out" | sed 's/^ *adr_test.go:[0-9]*: //'
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          printf '%s\n' "${out:-Every record is within the horizon.}"

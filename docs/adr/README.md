@@ -77,6 +77,26 @@ its record: if it still reads true, bump the date; if it does not, fix it. A
 record whose review date is far behind the code is a stale document, and stale
 documents are worse than absent ones.
 
+This is not left to memory. Three checks enforce the mechanical half — none of
+them can tell whether a record is still *true*, which is the part only a reader
+can do:
+
+| Check | Where | Blocks? |
+|---|---|---|
+| Headers parse; Status and Confidence are vocabulary; dates are possible; the index agrees with each record; sibling links resolve | [`adr_test.go`](adr_test.go), so plain `go test ./...` runs it | **yes** |
+| A record edited without a Last reviewed date at least as recent as the edit | `.github/workflows/adr.yml` | **yes** |
+| Records past a 90-day review horizon | same workflow, into the run summary; weekly on a schedule | no — reported only |
+
+The middle one is the one that matters, and it exists because this repository
+hit the failure: fifteen records were written on 2026-08-28 against a `main`
+that moved fourteen commits the same day, and five of them stated things the
+code had already contradicted. Editing a record means you read it, so the date
+moves with the edit.
+
+The horizon deliberately does **not** block. Staleness is a judgement about
+content, and a calendar-driven failure on pull requests that never touched
+`docs/` is how a required check trains people to override it.
+
 The **What would change our mind** section is where a record earns its keep. It
 names the observation that should trigger a revisit. If you hit one of those
 conditions, that is your cue to reopen the record — not to work around it
