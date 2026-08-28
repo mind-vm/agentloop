@@ -21,19 +21,20 @@ export default defineConfig({
       description:
         "A small Go engine for LLM agents that think by writing JavaScript " +
         "instead of calling named tools.",
-      // The 404 page is src/content/docs/404.mdx, served through the normal
-      // [...slug] route. Starlight otherwise injects a second, higher-priority
-      // /404 route; with a 404 entry in the collection both routes build the
-      // same path, and Astro warns about the collision on every build. The two
-      // render the identical component, so dropping the injected one costs
-      // nothing here and keeps the build log clean.
+      // The 404 page is src/content/docs/404.mdx. Starlight injects a
+      // dedicated /404 route to render it, and that route is deliberately
+      // left in place, even though it means every build logs:
       //
-      // Two consequences worth knowing. Deleting 404.mdx now removes the 404
-      // page entirely rather than falling back to Starlight's built-in one.
-      // And the injected route was the one marked `prerender`, which is moot
-      // for this static build but would matter if the site ever moved to SSR —
-      // revisit this line if it does.
-      disable404Route: true,
+      //   Could not render `/404` from route `/[...slug]` as it conflicts
+      //   with higher priority route `/404`.
+      //
+      // That warning is noise: the injected route and the [...slug] catch-all
+      // render the identical component, and the built 404.html is byte-for-
+      // byte the same either way. `disable404Route: true` silences it — but
+      // it also makes the custom 404 unreachable under `astro dev`, which
+      // falls back to Astro's own dev error page for every unmatched path,
+      // including /404 itself. A 404 page you cannot look at while working on
+      // it is worse than a line in the build log.
       social: [
         { icon: "github", label: "GitHub", href: "https://github.com/mind-vm/agentloop" },
       ],
