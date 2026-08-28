@@ -1,0 +1,44 @@
+# Builds and publishes CLI binaries when a version tag is pushed.
+#
+# A previous workflow of this name was removed because it did not do this:
+# it triggered on v* tags and then only ran build, vet and test, producing
+# no release at all. That work now lives in ci.yml, where it belongs — on
+# every push — and this one publishes.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # GoReleaser derives the changelog from history, which a shallow
+          # clone does not have.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ci.yml gates every push, but a tag can be placed on any commit,
+      # including one that never went through a pull request. Re-running the
+      # suite here is a few seconds against publishing a broken binary under
+      # a version number that cannot be taken back.
+      - name: Test
+        run: go test ./...
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

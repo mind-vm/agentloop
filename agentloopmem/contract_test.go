@@ -18,3 +18,13 @@ func TestStepStore_Contract(t *testing.T) {
 		// In-memory steps have no session FK → no EnsureSession needed.
 	})
 }
+
+// TestSessionStore_Contract runs the shared SessionStore conformance
+// harness against the in-memory implementation — the reference the
+// contract was written from, and so the check that it specifies the
+// behaviour the loop relies on rather than one store's incidentals.
+func TestSessionStore_Contract(t *testing.T) {
+	agentlooptest.SessionStoreContract(t, agentlooptest.SessionStoreHarness{
+		NewStore: func() agentloop.SessionStore { return agentloopmem.NewSessionStore(nil) },
+	})
+}

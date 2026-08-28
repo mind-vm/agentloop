@@ -6,7 +6,9 @@ sidebar:
 ---
 
 Each package is usable on its own — a project can take the sandbox and not
-the loop, or the loop with a hand-rolled store.
+the loop, or the loop with a hand-rolled store. `agentloop`, `sandbox`, and
+`llm` are the core; everything below them is optional, and nothing in the
+core imports any of it.
 
 ## `agentloop`
 
@@ -34,7 +36,10 @@ The goja-based JS executor and its built-in packs:
 | skill discovery | `skillList()` / `skillGet()` — introspects the union of loaded packs |
 
 A `PolicyChecker` seam gates side-effecting primitives (`fetch`, `ai`, or
-your own) per call — see [Policy](/extending/#policy).
+your own) per call — see [Policy](/extending/#policy). One turn's `log()`
+output is capped at `sandbox.DefaultMaxLogBytes` (16 KB), since logs are
+replayed in every later prompt of the session — see [Per-turn log
+output](/concepts/context/#per-turn-log-output).
 
 ## `llm`
 
@@ -88,6 +93,34 @@ URL rules `DefaultPolicy` applies to `fetch`.
 ```bash
 go get github.com/mind-vm/agentloop/browser/chrome
 ```
+
+## `projectctx`
+
+Discovers project instruction files — `AGENTS.md` and friends — from the
+repository root down to the working directory, and renders them into a
+prompt section to pass as `RunRequest.Context`. `Render` inlines each file
+in full; `RenderCatalog` + `Capabilities` instead put each file's opening
+section in the prompt and expose `projectGet(name)` / `projectList()` so the
+model pulls the rest on demand. See [Project instructions on
+demand](/concepts/context/#project-instructions-on-demand).
+
+Repository files must resolve inside the root even after symlinks and are
+read through an `os.Root`, so a symlinked `AGENTS.md` can't pull in a file
+from outside the project. No user-global file is read unless you ask for one
+(`Loader{GlobalDir: ...}`) — a library shouldn't reach into `$HOME` on its
+own.
+
+## `skills`
+
+Discovers `<root>/.agentloop/skills/<name>/SKILL.md` and turns each into a
+capability. The model learns a skill *exists* from a one-line catalog entry
+in the system prompt and pulls the full instructions with `skillGet(name)`
+when it decides the skill applies — so a project can carry a dozen detailed
+skills without any of them costing context until one is used.
+
+One capability per skill, not one for all of them, so
+`DefaultSandboxBuilder.EnabledCapabilities` can enable a skill for one
+session and not another.
 
 ## `pool`
 

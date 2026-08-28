@@ -1,13 +1,13 @@
 ---
 title: Extending agentloop
-description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, OpenAPI-generated skills, session-scoped sandbox reuse, distributed tracing, evaluating agent quality, and redacting secrets.
+description: Custom capabilities, sandbox composition, stores, policy, optional extension packs, OpenAPI-generated skills, session-scoped sandbox reuse, distributed tracing, context management, evaluating agent quality, and redacting secrets.
 sidebar:
   order: 1
 ---
 
 agentloop ships a minimal default (`DefaultCapabilities`,
 `DefaultSandboxBuilder`, `agentloopmem`'s in-memory stores,
-`sandbox.DefaultPolicy`) that's enough to run the quickstart, and eight seams
+`sandbox.DefaultPolicy`) that's enough to run the quickstart, and nine seams
 meant to be replaced for a real application — plus an eval harness for
 checking whether replacing them made things better or worse, and a
 redaction seam for keeping secrets out of both.
@@ -306,6 +306,17 @@ A JS execution error (the model's script threw) is recorded on
 `agentloop.execute_js` alone, not on the enclosing `agentloop.turn` — the
 turn itself didn't fail, it fed the error back to the model and kept going,
 so only the span for the operation that actually errored is marked.
+
+## Context management
+
+`Config.ContextBudget`, `Config.Compactor`, and `Config.HistoryWindow` are
+seams too, but they're covered on their own page: what fills the prompt, the
+four bounds that keep it inside a model's window, and
+`agentloop.ProfileFor(window)`, which derives all of them from one number.
+See [Fitting a session in the context
+window](/concepts/context/) — it matters most if you're pointing agentloop
+at a locally hosted model, where the defaults are wrong by an order of
+magnitude.
 
 ## Evaluating agent quality
 

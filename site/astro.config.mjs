@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from "astro/config";
+import { unified } from "@astrojs/markdown-remark";
 import starlight from "@astrojs/starlight";
 
 import { rehypeBaseLinks } from "./rehype-base-links.mjs";
@@ -39,13 +40,18 @@ export default defineConfig({
       editLink: {
         baseUrl: "https://github.com/mind-vm/agentloop/edit/main/site/",
       },
-      // Four groups, in the order a reader meets them: why (Concepts), how to
-      // get running (Start here), how to plug application-specific pieces in
-      // (Extending), and exactly what's available (Reference).
+      // Five groups, in the order a reader meets them: how to get running
+      // (Start here), how to drive it from a terminal (The CLI), why
+      // (Concepts), how to plug application-specific pieces in (Extending),
+      // and exactly what's available (Reference).
       sidebar: [
         {
           label: "Start here",
           items: [{ autogenerate: { directory: "start" } }],
+        },
+        {
+          label: "The CLI",
+          items: [{ autogenerate: { directory: "cli" } }],
         },
         {
           label: "Concepts",
@@ -78,7 +84,13 @@ export default defineConfig({
   // not `/agentloop/concepts/` — and this adds it at build time from the one
   // place `base` is defined. See rehype-base-links.mjs for what it does and
   // does not cover.
+  //
+  // Passed through `unified()` rather than the bare `markdown.rehypePlugins`
+  // key, which Astro 7.2 deprecated. Naming the processor explicitly does not
+  // shut integrations out of the pipeline: Astro merges plugins registered by
+  // integrations into whatever processor is configured, as long as it is a
+  // unified one, so Starlight's own Markdown handling is unaffected.
   markdown: {
-    rehypePlugins: [rehypeBaseLinks],
+    processor: unified({ rehypePlugins: [rehypeBaseLinks] }),
   },
 });
