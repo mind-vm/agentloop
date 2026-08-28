@@ -19,6 +19,15 @@ project with twenty skills cannot inline them at all.
 Truncating with a byte cap is the obvious fix and the wrong one: the tail
 becomes unreachable, and the model has no way to know it is missing.
 
+**And the cost is not only tokens — past a point it is a wall.**
+`RunRequest.Context` is appended to the *system* prompt, and
+`ContextBudget.fit` never drops `messages[0]`: without it the model loses the
+`run()`/`answer()` protocol and the entire tool surface, so a request that fits
+by discarding it is worse than one that overflows. An oversized instruction file
+is therefore not a prompt that gets trimmed — it is a prompt that **cannot be
+sent**, and no budget setting rescues it. That makes the excerpt load-bearing
+rather than an optimisation.
+
 ## Decision
 
 Put a **catalog** in the prompt and let the model fetch the body.
@@ -36,7 +45,9 @@ Put a **catalog** in the prompt and let the model fetch the body.
   never left dangling on a heading**), and the model pulls the rest with
   `projectGet(name)`. `projectList()` reports each file's size and whether the
   prompt already has all of it, so the model knows what it is missing. On a 36 KB
-  file that is ~9,300 → ~1,200 tokens per turn with nothing lost.
+  file that is ~9,300 → ~1,200 tokens per turn with nothing lost — and, for a
+  file large enough to blow the window on its own, the difference between a
+  run and no run at all.
 - **They are alternatives, not a pair.** `RenderCatalog` writes pointers to
   `projectGet`, so the capabilities must be wired alongside it.
 - **One capability per skill**, so `EnabledCapabilities` can switch a skill on
@@ -90,3 +101,8 @@ passes as `RunRequest.Context`.
 - 2026-08-28 — `projectctx` gained `RenderCatalog` / `projectGet` /
   `projectList` alongside the existing `Render`.
 - 2026-08-28 — Recorded.
+- 2026-08-28 — Context corrected. The first draft framed excerpting purely as a
+  per-turn token saving. It is also the only remedy for an instruction file too
+  large to send, because the budget cannot trim the system prompt it lands in —
+  see [ADR-0013](0013-context-control-from-one-number.md), whose own
+  "guarantees the request is sendable" claim was wrong for the same reason.

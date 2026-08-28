@@ -68,7 +68,16 @@ Three layers that do different jobs, plus one derivation over all of them.
   exactly on the defaults, so adopting it changes nothing for a hosted model.
 
 **These are complementary, not alternatives.** The compactor preserves meaning;
-the budget only guarantees the request is sendable. Configure both.
+the budget only bounds the request. **It does not guarantee the request is
+sendable**, and an early draft of this record claimed it did. `fit` protects a
+floor — `messages[0]` (the system prompt, carrying the `run()`/`answer()`
+protocol and the whole tool surface) and the final message — and when that floor
+alone exceeds the allowance there is nothing left to drop. The loop sets
+`budgetFit.Over`, sends anyway and warns, because the alternatives are a request
+stripped of the protocol or no request at all. The fix is an operator's:
+a bigger window, fewer registered packs, or a smaller persona — see
+[ADR-0014](0014-retrieval-over-inlining.md) for the instruction-file case, where
+excerpting is the only remedy. Configure both layers regardless.
 
 ## Consequences
 
@@ -114,3 +123,8 @@ types now, so their field names are public contract.
 - 2026-08-27 — Compaction persisted as a checkpoint step, so it is not redone.
 - 2026-08-28 — `ContextBudget`, chunked-and-folded summarisation, and
   `ProfileFor` added; recorded the same day.
+- 2026-08-28 — Corrected: the record said the budget "guarantees the request is
+  sendable". It does not, and cannot — a floor it must not trim can exceed the
+  allowance on its own, which is what `budgetFit.Over` reports. Caught by
+  `cmd/agentloop` making the same wrong claim in its flag help and then fixing
+  it.
