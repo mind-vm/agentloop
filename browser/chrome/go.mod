@@ -2,13 +2,9 @@ module github.com/mind-vm/agentloop/browser/chrome
 
 go 1.26
 
-// chromedp is held at v0.14.2 and cdproto at the revision it pairs
-// with. This no longer changes the toolchain floor — agentloop's own
-// dependency graph reaches a package declaring Go 1.26 either way — so
-// the pin is now only a deliberate hold, free to lift.
 require (
-	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327
-	github.com/chromedp/chromedp v0.14.2
+	github.com/chromedp/cdproto v0.0.0-20260804232424-e85f50dbfd32
+	github.com/chromedp/chromedp v0.16.0
 	github.com/mind-vm/agentloop v0.3.0
 )
 
