@@ -4,8 +4,14 @@
 // It is a module of its own — github.com/mind-vm/agentloop/browser/chrome
 // — because chromedp and cdproto together are larger than the whole of
 // agentloop, and a deployment that never opens a browser should not
-// carry them. The repo's go.work makes the split invisible while
-// developing; consumers opt in with one `go get`.
+// carry them. A replace directive keeps it buildable from a checkout;
+// consumers opt in with one `go get`.
+//
+// The split is also what contains the toolchain floor: cdproto reaches
+// a package that declares a newer Go than agentloop itself asks for, so
+// this module needs Go 1.26 where the root module needs 1.25. Keeping
+// it a separate module means that requirement never reaches anyone who
+// does not build a browser driver.
 //
 //	chrome := chrome.New(chrome.Options{})
 //	defer chrome.Close()
