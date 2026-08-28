@@ -66,8 +66,15 @@ export OPENAI_CHAT_MODEL=google/gemini-2.5-flash
 
 Groq, together.ai, and a local vLLM/Ollama server all work the same way.
 
+A local server needs more than the URL, though: the defaults above assume a
+frontier model's context window, and a placeholder `OPENAI_API_KEY` is still
+required even where the value is ignored. See [Running against a local
+model](/start/local-models/).
+
 ## Next
 
+- [Running against a local model](/start/local-models/) — Ollama,
+  llama.cpp, vLLM, or LM Studio, sized to the window they actually serve.
 - [Why JavaScript instead of tool calls](/concepts/) — the design
   the rest of the docs assume.
 - [Extending agentloop](/extending/) — plugging in your own

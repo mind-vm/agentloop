@@ -263,6 +263,9 @@ rather than one for all of them.
 
 ## Next
 
+- [Running against a local model](/start/local-models/) — this page's
+  settings applied end to end, plus the timeouts and the quiet failure mode
+  local hardware brings with it.
 - [Extending agentloop](/extending/) — the seams: capabilities,
   `SandboxBuilder`, stores, and policy.
 - [Reference](/reference/#known-limitations) — what these bounds still

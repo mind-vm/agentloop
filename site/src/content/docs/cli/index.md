@@ -151,3 +151,8 @@ called. Run `agentloop doctor` afterwards: it makes one real request through
 the same path a run uses, including the fallback for gateways that refuse to
 stream, so a configuration that will not work says so immediately rather than
 on the first turn.
+
+A locally hosted model works the same way, but needs more than the URL — a
+placeholder key, a longer `--timeout`, and context settings sized to the
+window the server actually serves. See [Running against a local
+model](/start/local-models/).
