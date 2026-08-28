@@ -274,6 +274,18 @@ approved and `agentloop sessions revoke <id>` forgets it.
 `Run` call in 100 lines, which is the thing to read when embedding the
 engine rather than running it.
 
+## Contributing
+
+[`AGENTS.md`](AGENTS.md) holds the conventions this codebase is written to —
+what belongs in `sandbox` versus `ext`, which seams to reach for, and the
+handful of behaviours that are load-bearing in ways the types do not show.
+It is written for an agent working here, and is the fastest orientation for
+a person too.
+
+CI runs `gofmt`, `go vet`, and `go test -race` on Linux and macOS, and
+cross-compiles for every target the CLI is released for — which is what
+catches a build-tag mistake in the platform-specific files.
+
 ## Extending
 
 - **Custom capabilities** — a `Capability` is a name plus a `Build` func
