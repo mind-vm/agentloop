@@ -7,12 +7,17 @@ hero:
     A small Go engine for LLM agents that think by writing JavaScript instead
     of calling named tools. The model's return value threads into the next
     turn server-side, at full fidelity — never re-serialised into the prompt.
+  # Relative, not root-relative, and deliberately so. This page sits at the
+  # deployment root, so "start/" resolves to <base>/start/ under any base.
+  # Frontmatter cannot import site.config.mjs, and Starlight passes hero
+  # action links straight through without prefixing them, so a relative link
+  # is what keeps these two independent of the deployment path.
   actions:
     - text: Quickstart
-      link: /agentloop/start/
+      link: start/
       icon: right-arrow
     - text: Read the concepts
-      link: /agentloop/concepts/
+      link: concepts/
       icon: open-book
       variant: minimal
     - text: View on GitHub
@@ -54,7 +59,7 @@ That return-threading design keeps the prompt small even for many-step runs:
 stale code is elided from history — only the most recent turn's script is
 kept verbatim — and large data never appears in the context window twice.
 
-[Why JavaScript instead of tool calls →](/agentloop/concepts/)
+[Why JavaScript instead of tool calls →](/concepts/)
 
 ## Nine packages, each independently useful
 
@@ -113,7 +118,7 @@ kept verbatim — and large data never appears in the context window twice.
   </Card>
 </CardGrid>
 
-[Package details →](/agentloop/concepts/packages/)
+[Package details →](/concepts/packages/)
 
 ## Built to be extended, not configured
 
@@ -146,12 +151,12 @@ kept verbatim — and large data never appears in the context window twice.
   </Card>
 </CardGrid>
 
-[Extending agentloop →](/agentloop/extending/)
+[Extending agentloop →](/extending/)
 
 ## Status
 
 This is a synchronous, single-process design, not a durable workflow engine —
-see [known limitations](/agentloop/reference/#known-limitations) for what that
+see [known limitations](/reference/#known-limitations) for what that
 means in practice (no durable execution, no async in the sandbox, no built-in
 cost ceiling). None of those are architectural dead ends; they're the natural
 next layer to add on top if and when you need them.

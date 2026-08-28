@@ -9,6 +9,7 @@ package agentlooptest
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -52,7 +53,11 @@ const (
 // The load-bearing guarantee is LastN's chronological (oldest-first)
 // order: the loop replays it straight into the LLM context, so a store
 // that returns rows newest-first would silently corrupt multi-turn
-// history.
+// history. The second is that ToolArgs survives a round trip: a
+// compaction checkpoint keeps its marker there, and a store that drops
+// the field turns every checkpoint into an unusable row — which shows
+// up not as an error but as a session quietly paying to re-summarize
+// itself on every run.
 func StepStoreContract(t *testing.T, h StepStoreHarness) {
 	t.Helper()
 	ctx := context.Background()
@@ -109,6 +114,51 @@ func StepStoreContract(t *testing.T, h StepStoreHarness) {
 			if row.Content != "content" || row.StepType != "response" {
 				t.Errorf("row %d: fields not preserved: %+v", i, row)
 			}
+		}
+	})
+
+	t.Run("ToolArgs round-trips, so a compaction checkpoint stays usable", func(t *testing.T) {
+		s := h.NewStore()
+		if h.EnsureSession != nil {
+			h.EnsureSession(sessMain)
+		}
+		marker, err := json.Marshal(agentloop.CompactionCheckpoint{RetainFromStep: 42})
+		if err != nil {
+			t.Fatalf("marshal checkpoint: %v", err)
+		}
+		step := agentloop.RunStep{
+			SessionID: sessMain,
+			StepIndex: 0,
+			StepType:  agentloop.StepTypeSummary,
+			Content:   "[summary] earlier turns",
+			ToolArgs:  marker,
+			CreatedAt: base,
+		}
+		if err := s.Append(ctx, step); err != nil {
+			t.Fatalf("Append checkpoint: %v", err)
+		}
+
+		got, err := s.LastN(ctx, sessMain, 10)
+		if err != nil {
+			t.Fatalf("LastN: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("want 1 row, got %d", len(got))
+		}
+		if got[0].StepType != agentloop.StepTypeSummary || got[0].Content != step.Content {
+			t.Errorf("checkpoint fields not preserved: %+v", got[0])
+		}
+		// Compared as JSON rather than bytes: a store that keeps this in
+		// a JSONB column may legitimately re-serialize it.
+		var want, have agentloop.CompactionCheckpoint
+		if err := json.Unmarshal(marker, &want); err != nil {
+			t.Fatalf("unmarshal want: %v", err)
+		}
+		if err := json.Unmarshal(got[0].ToolArgs, &have); err != nil {
+			t.Fatalf("ToolArgs did not survive the round trip (%q): %v", got[0].ToolArgs, err)
+		}
+		if have != want {
+			t.Errorf("ToolArgs round-tripped as %+v, want %+v", have, want)
 		}
 	})
 

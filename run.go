@@ -86,11 +86,32 @@ type Config struct {
 	// in compressed form instead of falling off the end of
 	// HistoryWindow unnoticed.
 	//
+	// A compaction that reports a CompactResult.Summary is persisted as
+	// a StepTypeSummary checkpoint, and later runs rehydrate from that
+	// rather than summarizing the same turns again — see
+	// rehydrateHistory. The covered steps remain in the trace; only
+	// what is replayed to the model changes.
+	//
 	// Optional; nil keeps the default behaviour — history is truncated
 	// to HistoryWindow and the overflow is simply gone. Compaction is
 	// best-effort: a Compactor that fails warns and the run proceeds on
 	// the uncompacted history.
 	Compactor Compactor
+
+	// ContextBudget bounds each turn's prompt in TOKENS, as a hard
+	// backstop under HistoryWindow and Compactor — both of which count
+	// MESSAGES and so cannot tell a forty-token turn from a
+	// four-thousand-token one. Optional; the zero value is disabled and
+	// preserves the prior behaviour exactly.
+	//
+	// Enabling it is what turns a context overflow from a provider
+	// error (or a silent server-side truncation) into a deliberate,
+	// observable trim: the oldest turns are dropped, the model is told
+	// how many, and a "budget_trimmed" event reports it. Set
+	// MaxTokens to the window the model is actually SERVED with — for a
+	// local runtime that is the server's configured context size, not
+	// the figure on the model card.
+	ContextBudget ContextBudget
 
 	// Now is a clock seam for tests. Nil uses time.Now.
 	Now func() time.Time
@@ -166,6 +187,13 @@ func New(cfg Config) Loop {
 	}
 	if cfg.HistoryWindow <= 0 {
 		cfg.HistoryWindow = HistoryWindow
+	}
+	// A reserve that swallows the whole window leaves no room for the
+	// prompt, so every request would be "over budget" from the first
+	// turn. That is a configuration error, not a degraded mode, and it
+	// surfaces at boot like the missing-dependency panics above.
+	if cfg.ContextBudget.enabled() && cfg.ContextBudget.allowance() <= 0 {
+		panic("agentloop: Config.ContextBudget.Reserve leaves no room for the prompt")
 	}
 	if cfg.Policy == nil {
 		cfg.Policy = sandbox.DefaultPolicy{}
@@ -306,8 +334,8 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		model = l.cfg.Model
 	}
 
-	history := rehydrateHistory(priorSteps, l.cfg.HistoryWindow)
-	history = l.compactHistory(ctx, req, usage, history)
+	history, stepOf := rehydrateHistory(priorSteps, l.cfg.HistoryWindow)
+	history = l.compactHistory(ctx, req, usage, history, stepOf, writeStep)
 	history = append(history, llm.Message{Role: "user", Content: req.Message})
 	// baseLen marks the end of the prior conversation, before this Run
 	// appends anything of its own — elideStaleCode uses it so eliding
@@ -372,9 +400,22 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 				dataBytesCarried += delta
 			}
 		}
+		// The single chokepoint where a prompt is bounded in tokens.
+		// Everything that grows it has already happened by here —
+		// rehydration, compaction, this run's own turns, elision, the
+		// args digest — so this is the only place the real size is
+		// knowable.
+		messages = l.fitBudget(messages, req, turnSpan)
+
 		llmReq := llm.CompletionRequest{
 			Messages: messages,
 			Model:    model,
+		}
+		// Reserve is only a guarantee if the completion is actually
+		// held to it; left unset, a long answer overruns the room the
+		// trim just made for it.
+		if outCap, ok := l.cfg.ContextBudget.completionCap(); ok {
+			llmReq.MaxTokens = &outCap
 		}
 
 		llmCtx, llmSpan := l.tracer.Start(tctx, spanLLMCall, trace.WithAttributes(
@@ -653,6 +694,50 @@ func redactEvent(r *redact.Redactor, evt RunEvent) RunEvent {
 	return evt
 }
 
+// fitBudget applies Config.ContextBudget to one turn's assembled
+// request, returning what to send.
+//
+// A trim is reported, never silent: dropping the early conversation is
+// exactly the kind of degradation that otherwise shows up much later
+// as an agent that has forgotten what it was asked. The event carries
+// the numbers an operator needs to decide whether to raise the window,
+// register fewer packs, or lower HistoryWindow so compaction — which
+// preserves meaning, unlike this — does the work instead.
+func (l *loop) fitBudget(messages []llm.Message, req RunRequest, span trace.Span) []llm.Message {
+	fit := l.cfg.ContextBudget.fit(messages)
+	if !l.cfg.ContextBudget.enabled() {
+		return fit.Messages
+	}
+	span.SetAttributes(
+		attribute.Int(attrBudgetTokens, fit.Tokens),
+		attribute.Int(attrBudgetAllowance, l.cfg.ContextBudget.allowance()),
+		attribute.Int(attrBudgetDropped, fit.Dropped),
+	)
+	if fit.Dropped > 0 {
+		l.emit(req.OnEvent, RunEvent{
+			Type: "budget_trimmed",
+			Args: map[string]any{
+				"messages_dropped": fit.Dropped,
+				"estimated_tokens": fit.Tokens,
+				"allowance":        l.cfg.ContextBudget.allowance(),
+			},
+		})
+	}
+	if fit.Over {
+		// Nothing droppable is left, so this warns and sends anyway
+		// rather than failing the run: the request may still succeed
+		// (the estimate is deliberately pessimistic), and a provider
+		// error is a better outcome than refusing to try.
+		l.emit(req.OnEvent, RunEvent{
+			Type: "warning",
+			Content: fmt.Sprintf(
+				"context budget: prompt is ~%d tokens against an allowance of %d with nothing left to drop — the system prompt and current turn alone exceed the window",
+				fit.Tokens, l.cfg.ContextBudget.allowance()),
+		})
+	}
+	return fit.Messages
+}
+
 // compactHistory hands the rehydrated history to Config.Compactor,
 // returning what the run should actually send.
 //
@@ -666,7 +751,7 @@ func redactEvent(r *redact.Redactor, evt RunEvent) RunEvent {
 // every path, including the error path: a provider call that produced
 // an unusable summary still cost what it cost, and a Run whose reported
 // usage omitted it would understate the session.
-func (l *loop) compactHistory(ctx context.Context, req RunRequest, usage *runTokenUsage, history []llm.Message) []llm.Message {
+func (l *loop) compactHistory(ctx context.Context, req RunRequest, usage *runTokenUsage, history []llm.Message, stepOf []int32, writeStep func(RunStep)) []llm.Message {
 	if l.cfg.Compactor == nil {
 		return history
 	}
@@ -689,6 +774,29 @@ func (l *loop) compactHistory(ctx context.Context, req RunRequest, usage *runTok
 		return history
 	}
 
+	// Persist the summary as a checkpoint so the NEXT Run rehydrates
+	// from it instead of paying to summarize the same turns again. A
+	// compactor that left Summary empty compacts for this run only; a
+	// failure to record the checkpoint costs that saving and nothing
+	// else, so it warns rather than failing the run.
+	persisted := false
+	if res.Summary != "" {
+		if retain, ok := retainFromStep(res.RetainedFrom, stepOf); ok {
+			marker, err := json.Marshal(CompactionCheckpoint{RetainFromStep: retain})
+			if err != nil {
+				l.emit(req.OnEvent, RunEvent{Type: "warning", Content: "compaction checkpoint not persisted: " + err.Error()})
+			} else {
+				writeStep(RunStep{
+					StepType: StepTypeSummary,
+					Content:  res.Summary,
+					ToolArgs: marker,
+				})
+				persisted = true
+				span.SetAttributes(attribute.Int64(attrCompactRetainFrom, int64(retain)))
+			}
+		}
+	}
+
 	after := len(res.Messages)
 	span.SetAttributes(
 		attribute.Int(attrCompactBefore, before),
@@ -697,8 +805,28 @@ func (l *loop) compactHistory(ctx context.Context, req RunRequest, usage *runTok
 	if after < before {
 		l.emit(req.OnEvent, RunEvent{
 			Type: "compacted",
-			Args: map[string]any{"messages_before": before, "messages_after": after},
+			Args: map[string]any{"messages_before": before, "messages_after": after, "persisted": persisted},
 		})
 	}
 	return res.Messages
+}
+
+// retainFromStep translates a compactor's message-space RetainedFrom
+// into the StepIndex a checkpoint must name, using the step each
+// rehydrated message came from.
+//
+// It reports false when there is no checkpoint worth writing: a
+// RetainedFrom of zero or less means the compaction folded nothing
+// away, and recording a checkpoint that covers nothing would replay a
+// summary alongside the very history it summarizes.
+func retainFromStep(retainedFrom int, stepOf []int32) (int32, bool) {
+	if retainedFrom <= 0 || len(stepOf) == 0 {
+		return 0, false
+	}
+	if retainedFrom >= len(stepOf) {
+		// Everything was folded away, so the retained history starts
+		// after the last step that had a message — one past it.
+		return stepOf[len(stepOf)-1] + 1, true
+	}
+	return stepOf[retainedFrom], true
 }

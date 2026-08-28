@@ -35,8 +35,17 @@ const (
 	attrPromptTok   = "agentloop.tokens.prompt"
 	attrCompleteTok = "agentloop.tokens.completion"
 
-	attrCompactBefore = "agentloop.compact.messages_before"
-	attrCompactAfter  = "agentloop.compact.messages_after"
+	attrCompactBefore     = "agentloop.compact.messages_before"
+	attrCompactAfter      = "agentloop.compact.messages_after"
+	attrCompactRetainFrom = "agentloop.compact.retain_from_step"
+
+	// Set on every turn span when a ContextBudget is configured, so a
+	// trace shows how close each turn ran to the window — the signal
+	// that says whether a session is about to start losing history,
+	// before it actually does.
+	attrBudgetTokens    = "agentloop.budget.estimated_tokens"
+	attrBudgetAllowance = "agentloop.budget.allowance"
+	attrBudgetDropped   = "agentloop.budget.messages_dropped"
 )
 
 // resolveTracer returns tp's "github.com/mind-vm/agentloop" Tracer, or a

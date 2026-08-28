@@ -68,7 +68,7 @@ Groq, together.ai, and a local vLLM/Ollama server all work the same way.
 
 ## Next
 
-- [Why JavaScript instead of tool calls](/agentloop/concepts/) — the design
+- [Why JavaScript instead of tool calls](/concepts/) — the design
   the rest of the docs assume.
-- [Extending agentloop](/agentloop/extending/) — plugging in your own
+- [Extending agentloop](/extending/) — plugging in your own
   capabilities, stores, and policy for production use.

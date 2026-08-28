@@ -42,6 +42,11 @@ func main() {
 	// passes the rendered section as this run's Context. A partial load
 	// is worth a warning, not an exit — the docs that did read are still
 	// returned alongside the error.
+	//
+	// RenderCatalog + Capabilities is the retrieval mode: each file's
+	// opening section rides in the prompt and the rest is pulled with
+	// projectGet(name) on demand. Render inlines everything instead,
+	// which is simpler but pays for every byte on every turn.
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "agentloop: "+err.Error())
@@ -61,6 +66,7 @@ func main() {
 	}
 
 	caps := append(agentloop.DefaultCapabilities(client, ""), skills.Capabilities(sk)...)
+	caps = append(caps, projectctx.Capabilities(docs)...)
 	l := agentloop.New(agentloop.Config{
 		LLM:            client,
 		Sessions:       agentloopmem.NewSessionStore(nil),
@@ -72,7 +78,7 @@ func main() {
 		SessionID: "cli-session",
 		Scope:     agentloop.Scope{WorkspaceID: "local"},
 		Message:   message,
-		Context:   projectctx.Render(docs),
+		Context:   projectctx.RenderCatalog(docs),
 		OnEvent:   printEvent,
 	})
 	if err != nil {

@@ -34,10 +34,17 @@ type FinalizeSummary struct {
 }
 
 // RunStep is one persisted row in the session's trace. StepType is the
-// discriminator: user, execute_js, execute_js_result, response, error.
-// rehydrateHistory (history.go) only replays user / response /
+// discriminator: user, execute_js, execute_js_result, response, error,
+// summary. rehydrateHistory (history.go) only replays user / response /
 // execute_js / execute_js_result back to the LLM — error rows stay in
 // the trace but don't feed back.
+//
+// A StepTypeSummary row is a compaction checkpoint rather than a turn:
+// its Content is replayed in place of the steps it covers, and its
+// ToolArgs holds a CompactionCheckpoint naming where retained history
+// resumes. Store implementations need do nothing special for it — it is
+// an ordinary append — but they must preserve ToolArgs verbatim, since
+// losing that marker turns the checkpoint into an unusable row.
 type RunStep struct {
 	SessionID        string
 	StepIndex        int32

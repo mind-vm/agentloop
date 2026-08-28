@@ -36,6 +36,7 @@ type Sandbox struct {
 	helpEntries  map[string]string
 	packs        []Pack
 	execTimeout  time.Duration
+	maxLogBytes  int // 0 = DefaultMaxLogBytes, negative = uncapped
 	onEvent      OnEvent
 	requireCache map[string]goja.Value // cached require() results per session
 	skillCode    map[string]string     // name → JS code, looked up by require()
@@ -97,6 +98,16 @@ func New(packs ...Pack) *Sandbox {
 // (larger). Zero disables the timeout entirely — fine for fakes.
 func (s *Sandbox) SetExecTimeout(d time.Duration) {
 	s.execTimeout = d
+}
+
+// SetMaxLogBytes overrides DefaultMaxLogBytes, the cap on one turn's
+// log() output. Zero restores the default; negative removes the cap.
+//
+// Lower it for a model with a small context window: a turn's logs are
+// replayed in every subsequent prompt of the session, so this is one of
+// the few per-turn costs that compounds.
+func (s *Sandbox) SetMaxLogBytes(n int) {
+	s.maxLogBytes = n
 }
 
 // snapshotGlobalKeys returns the set of enumerable keys currently on
@@ -424,7 +435,19 @@ func (s *Sandbox) ExecuteTurn(code string, argsJSON json.RawMessage) (logs strin
 	return logs, ret, nil
 }
 
-// joinedLogs returns the captured log lines joined by newlines.
+// DefaultMaxLogBytes caps one turn's log() output when
+// Sandbox.SetMaxLogBytes has not lowered it.
+//
+// A turn's logs are the model's only visible channel out of the
+// sandbox, and they are replayed in every later prompt of the session —
+// so one script that logs a whole dataset instead of returning it does
+// not cost one turn, it costs every turn after it. The system prompt
+// asks the model not to do that; this is what happens when it does
+// anyway.
+const DefaultMaxLogBytes = 16 * 1024
+
+// joinedLogs returns the captured log lines joined by newlines, bounded
+// by the configured cap.
 func (s *Sandbox) joinedLogs() string {
 	if len(s.logs) == 0 {
 		return ""
@@ -433,7 +456,26 @@ func (s *Sandbox) joinedLogs() string {
 	for _, l := range s.logs {
 		lines = append(lines, l.Message)
 	}
-	return strings.Join(lines, "\n")
+	return truncateLogs(strings.Join(lines, "\n"), s.maxLogBytes)
+}
+
+// truncateLogs bounds log output to max bytes, keeping the head and the
+// tail. Both, because the two halves carry different things: the head
+// has how the script proceeded, and the tail typically has what it
+// concluded — a total, a count, the line the agent actually meant to
+// read. Head-only truncation reliably drops the one line that mattered.
+func truncateLogs(out string, max int) string {
+	if max == 0 {
+		max = DefaultMaxLogBytes
+	}
+	if max < 0 || len(out) <= max {
+		return out
+	}
+	head := max * 3 / 4
+	tail := max - head
+	return out[:head] +
+		fmt.Sprintf("\n... (%d bytes of log output omitted — log selectively, or return data instead) ...\n", len(out)-max) +
+		out[len(out)-tail:]
 }
 
 // exportJSON marshals a returned Goja value to JSON, or nil for

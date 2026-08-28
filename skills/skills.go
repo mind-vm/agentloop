@@ -72,15 +72,20 @@ type Skill struct {
 // the fetch primitive's documentation with its own, and a skill called
 // "http" would collide with the module require() resolves by that name.
 //
-// This mirrors sandbox's built-in packs and core primitives. It is a
-// static list rather than a query because skills load before a sandbox
-// exists — worth re-checking when the built-in surface changes.
+// This mirrors sandbox's built-in packs and core primitives, plus
+// projectctx's retrieval pack. It is a static list rather than a query
+// because skills load before a sandbox exists — worth re-checking when
+// the built-in surface changes.
+//
+// Names are matched against the LOWERCASED skill name, so an entry has
+// to be spelled in lower case to be reachable at all.
 var reserved = map[string]bool{
 	"ai": true, "aiJSON": true, "answer": true, "assert": true,
 	"console": true, "fetch": true, "help": true, "htmlToMarkdown": true,
 	"http": true, "log": true, "markdown": true, "parseUrl": true,
-	"print": true, "require": true, "skillGet": true, "skillList": true,
-	"skills": true, "text": true,
+	"print": true, "project": true, "project_instructions": true,
+	"projectget": true, "projectlist": true, "require": true,
+	"skillGet": true, "skillList": true, "skills": true, "text": true,
 }
 
 // validName keeps a skill name usable as an identifier the model types

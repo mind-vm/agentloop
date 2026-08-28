@@ -309,13 +309,105 @@ catches a build-tag mistake in the platform-specific files.
   implementation: past `Trigger` messages it summarizes everything
   except the most recent `Keep` via an `llm.Client` (point it at a small,
   cheap model), and it never splits a `run()` block from the execution
-  result it produced. Raising `HistoryWindow` alongside it is how a
+  result it produced. A session long enough to need compaction can be
+  long enough to overflow the context of the call meant to fix that, so
+  the transcript is summarized in **chunks** that each fit one call and
+  the partial summaries are folded together until one remains —
+  `SummarizingCompactor.Budget` (a `ContextBudget`, sized to the
+  *summarizer's* window, not the loop's) is what sizes a chunk, and
+  `MergePrompt` overrides the fold instruction. Nothing is discarded to
+  make the transcript fit: a stretch a single-call summarizer would have
+  elided is summarized like any other, and the only surviving elision is
+  for one individual message too large for a whole call on its own. A
+  242 KB transcript takes one call against a 128k window and 21 against
+  a 4k one, where before it was a single oversized call the small model
+  would reject. Raising `HistoryWindow` alongside it is how a
   session gets long-term memory — the prompt stays bounded by the
-  compactor rather than by the window. The cost is one extra provider
-  call per `Run` once a session passes `Trigger`, since compaction isn't
-  persisted; `Trigger` is the knob for how often you pay it. Compaction
-  is best-effort — a failure emits a `warning` event and the run
-  proceeds on the uncompacted history.
+  compactor rather than by the window. Each compaction is persisted as
+  a `summary` checkpoint step, so the next `Run` rehydrates from it
+  rather than summarizing the same turns again — a long session pays for
+  a summarization only when it has grown past `Trigger` since the last
+  one, not on every `Run`. The covered steps stay in the trace; only
+  what is replayed to the model changes. Compaction is best-effort — a
+  failure emits a `warning` event and the run proceeds on the
+  uncompacted history.
+- **Token budget** — `HistoryWindow` and the compactor both count
+  *messages*, which says nothing about how many *tokens* those messages
+  occupy: the same 60-turn history is trivial against a frontier model
+  and a hard overflow against a locally hosted one. Set
+  `Config.ContextBudget` to bound each turn's prompt in tokens instead.
+  `MaxTokens` is the window the model is actually served with (for a
+  local runtime, the server's configured context size — llama.cpp's
+  `--ctx-size`, Ollama's `num_ctx` — not the figure on the model card),
+  and `Reserve` is what's held back for the completion (default
+  `MaxTokens/8`, clamped to `[512, 4096]`); the reserve is also sent as
+  the request's output cap, so a long answer can't overrun the room made
+  for it. The zero value is disabled, so adding a budget changes nothing
+  until `MaxTokens` is set.
+
+  The trim runs immediately before each request — after compaction,
+  after stale-code elision, and after this run's own turns have grown
+  the history, which is the only point where the real size is knowable.
+  The system prompt and the current turn are never dropped; the oldest
+  conversational turns go first, an execution result is never stranded
+  from the `run()` block that produced it, and a marker tells the model
+  how many turns are gone so it doesn't quietly assume what they
+  contained. Every trim emits a `budget_trimmed` event and every turn
+  span carries `agentloop.budget.estimated_tokens` against
+  `agentloop.budget.allowance`, so headroom is observable before a
+  session starts losing history. Sizing uses a crude bytes/4 estimate by
+  default — supply `ContextBudget.Estimate` to plug in a real tokenizer
+  and fill the window tighter.
+
+  This is a backstop, not a replacement for compaction: the compactor
+  preserves meaning, the budget only guarantees the request is sendable.
+  Configure both.
+- **Small-model profile** — a model's context window sets four limits
+  this package exposes as separate knobs in three different units:
+  `ContextBudget` in tokens, `HistoryWindow` in steps, the compactor's
+  `Trigger`/`Keep` in messages, log output in bytes. Every default
+  assumes a frontier model, so against an 8k local model they are wrong
+  by an order of magnitude — and fixing that by hand means four unit
+  conversions from one number you already know.
+  `agentloop.ProfileFor(window)` is that number expanded:
+
+  ```go
+  p := agentloop.ProfileFor(8192)
+  docs, _ := projectctx.Loader{InlineBytes: p.ProjectInlineBytes}.Load(cwd)
+  cfg := agentloop.Config{
+      LLM: client, Sessions: sessions, Steps: steps,
+      SandboxBuilder: &agentloop.DefaultSandboxBuilder{
+          Capabilities: caps,
+          MaxLogBytes:  p.MaxLogBytes,
+      },
+      Compactor: &agentloop.SummarizingCompactor{LLM: client},
+  }
+  p.Apply(&cfg) // ContextBudget, HistoryWindow, and the compactor's knobs
+  ```
+
+  | window | history | trigger/keep | log bytes | AGENTS.md inline |
+  |---|---|---|---|---|
+  | 4k | 42 | 14/4 | 1,792 | 1,792 |
+  | 8k | 84 | 28/9 | 3,584 | 3,584 |
+  | 32k | 180 | 60/20 | 14,336 | 4,096 |
+  | 128k+ | 180 | 60/20 | 16,384 | 4,096 |
+
+  At a large window it lands on the package defaults, so adopting it
+  changes nothing for a hosted model. `ProfileFor(0)` returns a zero
+  `Profile` whose `Apply` is a no-op — "I don't know the window"
+  degrades to the defaults rather than to a guess. It is a starting
+  point, not a constraint: read the fields and override what your
+  workload justifies. `Apply` leaves a custom `Compactor` alone (its
+  knobs are its own) and never touches the sandbox builder or the
+  project-instruction loader, which are separate objects you construct.
+
+  The remaining lever it can't pull for you is **how many packs you
+  register**: `DefaultCapabilities` costs ~1,300 prompt tokens of
+  `declare` lines on every turn, and the `ext/` packs (especially
+  OpenAPI-generated ones) add more. On a small window, dropping
+  capabilities a given agent never uses is often the largest single
+  saving available — `DefaultSandboxBuilder.EnabledCapabilities` is the
+  per-session allowlist for that.
 - **Project instructions** — `projectctx.Load(cwd)` walks from the
   repository root down to `cwd` collecting `AGENTS.md` files (general
   first, most specific last), and `projectctx.Render(docs)` turns them
@@ -329,6 +421,22 @@ catches a build-tag mistake in the platform-specific files.
   came from, no user-global file is read unless you ask for one
   (`Loader{GlobalDir: ...}`) — a library shouldn't reach into `$HOME` on
   its own.
+
+  `Render` inlines every file in full, which is a *standing* cost —
+  these ride in the prompt of every turn of every run, whether or not
+  the turn touches anything they cover. `projectctx.RenderCatalog(docs)`
+  plus `projectctx.Capabilities(docs)` is the retrieval alternative: the
+  prompt carries each file's opening section (`Loader.InlineBytes`,
+  4 KB by default, cut at a paragraph boundary and never left dangling
+  on a heading), and the model pulls the rest with `projectGet(name)`
+  when it needs it — `projectList()` reports each file's size and
+  whether the prompt already has all of it. A typical page-or-two
+  AGENTS.md rides along whole and nothing changes; a 36 KB one drops
+  from ~9,300 to ~1,200 prompt tokens per turn, with nothing lost —
+  unlike `MaxBytes` truncation, the tail stays reachable. The two are
+  alternatives, not a pair: `RenderCatalog` writes pointers to
+  `projectGet`, so wire the capabilities alongside it. See
+  `examples/cli`.
 - **Project skills** — `skills.Load(cwd)` reads
   `<root>/.agentloop/skills/<name>/SKILL.md` (directory configurable) and
   `skills.Capabilities(sk)` turns them into capabilities to append to

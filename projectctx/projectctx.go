@@ -18,6 +18,29 @@
 // Render returns "" for no docs and the loop skips an empty Context, so
 // the call is safe to make unconditionally.
 //
+// # Retrieval mode
+//
+// Render inlines every doc in full, which is a STANDING cost: these
+// files ride in the prompt of every turn of every run, so a large
+// AGENTS.md is paid for on each round-trip whether or not the turn
+// touches anything it covers. Against a small context window that is
+// often the single largest avoidable line item.
+//
+// RenderCatalog + Capabilities is the alternative: the prompt carries
+// each file's opening section, and the model pulls the rest with
+// projectGet(name) when it needs it.
+//
+//	docs, err := projectctx.Load(cwd)
+//	caps = append(caps, projectctx.Capabilities(docs)...) // adds projectGet/projectList
+//	result, err := loop.Run(ctx, agentloop.RunRequest{
+//	    SessionID: id,
+//	    Message:   msg,
+//	    Context:   projectctx.RenderCatalog(docs),
+//	})
+//
+// The two are alternatives, not a pair: RenderCatalog points the model
+// at projectGet, so the capabilities must be wired alongside it.
+//
 // "Project" here means a checkout on disk — a directory tree with a
 // repository root. It is unrelated to agentloop.Scope.ProjectID, which
 // is a tenant boundary; a single Scope may span many checkouts and a
@@ -37,11 +60,24 @@ import (
 // convention for agent-readable project guidance.
 const DefaultFileName = "AGENTS.md"
 
-// DefaultMaxBytes caps a single instruction file's contribution when
-// Loader.MaxBytes is zero. These files land in every prompt of every
-// run, so an oversized one is a standing cost rather than a one-off:
-// past the cap the head is kept and the rest replaced by a marker.
+// DefaultMaxBytes caps a single instruction file's body when
+// Loader.MaxBytes is zero. Past the cap the head is kept and the rest
+// replaced by a marker.
+//
+// Under Render this is what lands in every prompt, so an oversized file
+// is a standing cost rather than a one-off. Under RenderCatalog it caps
+// only what projectGet can return, and DefaultInlineBytes is the figure
+// that governs the prompt.
 const DefaultMaxBytes = 64 * 1024
+
+// DefaultInlineBytes caps the part of a doc that RenderCatalog puts in
+// the prompt when Loader.InlineBytes is zero.
+//
+// Sized so a typical AGENTS.md — a page or two of conventions — rides
+// along whole and nothing changes for it, while the outliers that
+// actually justify retrieval get excerpted. Raising it trades context
+// for fewer projectGet round-trips; lowering it does the reverse.
+const DefaultInlineBytes = 4 * 1024
 
 // Doc is one discovered instruction file.
 type Doc struct {
@@ -56,8 +92,31 @@ type Doc struct {
 	Name string
 
 	// Content is the trimmed file body, truncated at Loader.MaxBytes.
+	// This is what Render inlines, and what projectGet returns.
 	Content string
+
+	// Inline is the bounded opening section of Content — what
+	// RenderCatalog puts in the prompt, cut at a line boundary and
+	// capped at Loader.InlineBytes. Equal to Content when the whole
+	// file fits.
+	//
+	// Empty on a Doc built by hand rather than by Load, in which case
+	// InlineText falls back to Content: a caller who assembled its own
+	// docs has already decided how big they are.
+	Inline string
 }
+
+// InlineText is the part of the doc that belongs in the prompt.
+func (d Doc) InlineText() string {
+	if d.Inline == "" {
+		return d.Content
+	}
+	return d.Inline
+}
+
+// Complete reports whether the prompt carries the whole file, i.e.
+// whether there is anything left for projectGet to add.
+func (d Doc) Complete() bool { return d.InlineText() == d.Content }
 
 // Loader discovers instruction files. The zero value is usable and
 // looks for AGENTS.md files from the repository root down to the
@@ -78,9 +137,16 @@ type Loader struct {
 	// filepath.Join(home, ".myagent").
 	GlobalDir string
 
-	// MaxBytes caps each file's contribution. Zero uses
-	// DefaultMaxBytes; negative disables truncation.
+	// MaxBytes caps each file's body. Zero uses DefaultMaxBytes;
+	// negative disables truncation.
 	MaxBytes int
+
+	// InlineBytes caps how much of each file RenderCatalog puts in the
+	// prompt. Zero uses DefaultInlineBytes; negative inlines the whole
+	// body, which makes RenderCatalog equivalent to Render.
+	//
+	// Ignored by Render, which inlines everything by definition.
+	InlineBytes int
 }
 
 // Load discovers instruction files for a session rooted at cwd with the
@@ -209,7 +275,7 @@ func (l Loader) makeDoc(path, name string, b []byte) (Doc, bool) {
 		content = strings.TrimSpace(content[:max]) +
 			fmt.Sprintf("\n\n[... truncated at %d bytes ...]", max)
 	}
-	return Doc{Path: path, Name: name, Content: content}, true
+	return Doc{Path: path, Name: name, Content: content, Inline: head(content, l.inlineBytes())}, true
 }
 
 func (l Loader) maxBytes() int {
@@ -217,6 +283,58 @@ func (l Loader) maxBytes() int {
 		return DefaultMaxBytes
 	}
 	return l.MaxBytes // negative disables truncation
+}
+
+func (l Loader) inlineBytes() int {
+	if l.InlineBytes == 0 {
+		return DefaultInlineBytes
+	}
+	return l.InlineBytes // negative inlines everything
+}
+
+// head returns the opening max bytes of s, cut at a line boundary so
+// the excerpt never stops mid-sentence — the model reads the result as
+// prose, and a severed clause invites it to guess at the other half.
+// Returns s unchanged when it already fits or max is non-positive.
+func head(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	cut := s[:max]
+	// Prefer a paragraph break, then any line break, then the hard cut
+	// — which only survives for a file with no newline in its first
+	// max bytes at all.
+	if i := strings.LastIndex(cut, "\n\n"); i > 0 {
+		cut = cut[:i]
+	} else if i := strings.LastIndex(cut, "\n"); i > 0 {
+		cut = cut[:i]
+	}
+	return dropDanglingHeadings(strings.TrimSpace(cut))
+}
+
+// dropDanglingHeadings removes headings left with no body under them,
+// which is where a paragraph-boundary cut lands whenever the excerpt
+// runs out partway through a section: "## Deployment" with nothing
+// after it reads as an EMPTY section rather than as a cut, and an
+// agent that takes it literally concludes the project has no
+// deployment rules.
+//
+// Falls back to the input when stripping would leave nothing — a file
+// of nothing but headings has no better excerpt to offer.
+func dropDanglingHeadings(s string) string {
+	out := s
+	for {
+		trimmed := strings.TrimSpace(out)
+		i := strings.LastIndex(trimmed, "\n")
+		last := strings.TrimSpace(trimmed[i+1:])
+		if !strings.HasPrefix(last, "#") {
+			return trimmed
+		}
+		if i < 0 {
+			return s // the whole excerpt is one heading
+		}
+		out = trimmed[:i]
+	}
 }
 
 // Render composes docs into the prompt section an application passes as

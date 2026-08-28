@@ -380,9 +380,20 @@ whole substring to redact against, so per-chunk redaction can't be made
 safe. The complete, redacted text still arrives via the terminal
 `"response"` event; only the incremental "typing" effect is lost.
 
+## Context management
+
+`Config.ContextBudget`, `Config.Compactor`, and `Config.HistoryWindow` are
+seams too, but they're covered on their own page: what fills the prompt, the
+four bounds that keep it inside a model's window, and
+`agentloop.ProfileFor(window)`, which derives all of them from one number.
+See [Fitting a session in the context
+window](/concepts/context/) — it matters most if you're pointing agentloop
+at a locally hosted model, where the defaults are wrong by an order of
+magnitude.
+
 ## Next
 
-[Reference](/agentloop/reference/) has the full list of known limitations —
+[Reference](/reference/) has the full list of known limitations —
 worth reading before extending agentloop into a production path, since
 several of them (no durable execution, no built-in cost ceiling) are things
 an application built on top has to supply itself.

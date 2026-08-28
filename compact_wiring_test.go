@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -248,4 +249,126 @@ func hasWarning(warnings []string, substr string) bool {
 		}
 	}
 	return false
+}
+
+// seedTurns writes n alternating user/response steps, each tagged so a
+// prompt assertion can tell which turn it came from.
+func seedTurns(t *testing.T, steps *memorySteps, id string, n int) {
+	t.Helper()
+	for i := range n {
+		kind := "user"
+		if i%2 == 1 {
+			kind = "response"
+		}
+		step := agentloop.RunStep{
+			SessionID: id,
+			StepIndex: int32(i),
+			StepType:  kind,
+			Content:   fmt.Sprintf("turn-%d", i),
+			ToolArgs:  json.RawMessage(`{}`),
+		}
+		if err := steps.Append(context.Background(), step); err != nil {
+			t.Fatalf("seed step %d: %v", i, err)
+		}
+	}
+}
+
+func hasType(types []string, want string) bool {
+	for _, s := range types {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// The whole point of persisting a checkpoint: a session that has been
+// compacted once must not pay to summarize the same turns again on
+// every subsequent Run.
+func TestCompactionIsNotRecomputedOnTheNextRun(t *testing.T) {
+	steps := newMemorySteps()
+	seedTurns(t, steps, "s6", 20)
+
+	summarizer := newFakeLLM("summarizer",
+		llm.CompletionResponse{Content: "EARLIER-WORK-SUMMARIZED", InputTokens: 100, OutputTokens: 10},
+	)
+	compactor := &agentloop.SummarizingCompactor{LLM: summarizer, Trigger: 10, Keep: 4}
+	fake := newFakeLLM("fake",
+		llm.CompletionResponse{Content: "DONE\nfirst"},
+		llm.CompletionResponse{Content: "DONE\nsecond"},
+	)
+	loop := compactorLoop(t, compactor, fake, steps, "s6")
+
+	// --- Run 1: compacts, and records the result as a checkpoint. ---
+	if _, err := loop.Run(context.Background(), agentloop.RunRequest{SessionID: "s6", Message: "first ask"}); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if n := len(summarizer.Calls()); n != 1 {
+		t.Fatalf("summarizer called %d times on the first run, want 1", n)
+	}
+	if !hasType(steps.types("s6"), agentloop.StepTypeSummary) {
+		t.Fatalf("no checkpoint persisted; steps = %v", steps.types("s6"))
+	}
+
+	// --- Run 2: rehydrates from the checkpoint instead of redoing it. ---
+	if _, err := loop.Run(context.Background(), agentloop.RunRequest{SessionID: "s6", Message: "second ask"}); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	if n := len(summarizer.Calls()); n != 1 {
+		t.Fatalf("summarizer called %d times across both runs, want 1 — the checkpoint was not reused", n)
+	}
+
+	// And the second run's prompt really is the compacted history: the
+	// summary stands in for the oldest turns, which are gone.
+	sent := fake.Calls()[1].Messages
+	var joined string
+	for _, m := range sent {
+		joined += m.Content + "\n"
+	}
+	if !strings.Contains(joined, "EARLIER-WORK-SUMMARIZED") {
+		t.Error("the second run's prompt should carry the persisted summary")
+	}
+	if strings.Contains(joined, "turn-0") {
+		t.Error("a turn the checkpoint covers was replayed verbatim as well as summarized")
+	}
+	// The retained tail survives — compaction must not cost the recent turns.
+	if !strings.Contains(joined, "turn-19") {
+		t.Error("the retained tail should still be replayed verbatim")
+	}
+	if !strings.Contains(joined, "first ask") {
+		t.Error("the previous run's own turn should still be in history")
+	}
+}
+
+// A compactor that leaves Summary empty is compacting for this run
+// only; the loop must not invent a checkpoint on its behalf.
+func TestNoCheckpointWithoutASummary(t *testing.T) {
+	steps := newMemorySteps()
+	seedHistory(t, steps, "s7")
+
+	compactor := &stubCompactor{result: agentloop.CompactResult{
+		Messages: []llm.Message{{Role: "user", Content: "[summary]"}},
+		// Summary deliberately empty.
+	}}
+	fake := newFakeLLM("fake", llm.CompletionResponse{Content: "DONE\nok"})
+
+	var persisted any
+	loop := compactorLoop(t, compactor, fake, steps, "s7")
+	if _, err := loop.Run(context.Background(), agentloop.RunRequest{
+		SessionID: "s7",
+		Message:   "hello",
+		OnEvent: func(e agentloop.RunEvent) {
+			if e.Type == "compacted" {
+				persisted = e.Args["persisted"]
+			}
+		},
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if hasType(steps.types("s7"), agentloop.StepTypeSummary) {
+		t.Errorf("a checkpoint was written for a compactor that asked for none; steps = %v", steps.types("s7"))
+	}
+	if persisted != false {
+		t.Errorf("compacted event reported persisted=%v, want false", persisted)
+	}
 }
