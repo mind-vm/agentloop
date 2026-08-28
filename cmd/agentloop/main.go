@@ -114,10 +114,12 @@ FLAGS
   --model string          chat model (default: $OPENAI_CHAT_MODEL)
   --max-steps int         cap LLM round-trips per run (default 20)
   --timeout duration      wall-clock cap per run (default 5m)
-  --history-window int    prior steps rehydrated into context (default 80)
-  --context-window int    the model's context size in tokens; sizes the prompt
-                          budget, compaction and log caps to it (default: assume
-                          a large window). Set this for a local model.
+  --history-window int    prior steps rehydrated into context (default 80,
+                          and overrides what --context-window derives)
+  --context-window int    the model's SERVED context size in tokens; sizes the
+                          prompt budget, compaction and log caps to it
+                          (default: assume a large window). Set this for a
+                          local model.
   --session string        session id to run under (default: a new one)
   --continue              resume the most recently updated session
   --ephemeral             keep the session in memory; write nothing

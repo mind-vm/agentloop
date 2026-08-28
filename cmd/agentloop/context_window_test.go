@@ -211,10 +211,10 @@ func TestUnsizedRunInlinesProjectInstructions(t *testing.T) {
 	}
 }
 
-// Sized, the prompt carries the opening and the rest is retrievable —
-// inlining 36 KB against an 8k window would spend the budget before the
-// conversation started, and letting the budget drop it would lose it
-// outright, since the budget drops rather than summarizes.
+// Sized, the prompt carries the opening and the rest is retrievable.
+// The budget cannot clean this up afterwards: instruction files ride in
+// the SYSTEM prompt, which the trimmer never drops, so an oversized one
+// is a prompt that cannot be sent rather than one that gets trimmed.
 func TestSizedRunExcerptsProjectInstructions(t *testing.T) {
 	sess := buildSession(t, options{contextWindow: 8192}, bigAgentsMD())
 

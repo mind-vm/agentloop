@@ -76,8 +76,8 @@ func (o *options) bind(fs *flag.FlagSet) {
 	fs.StringVar(&o.model, "model", "", "chat model (default: the client's own, from $OPENAI_CHAT_MODEL)")
 	fs.IntVar(&o.maxSteps, "max-steps", 0, "cap LLM round-trips per run (0 = engine default)")
 	fs.DurationVar(&o.timeout, "timeout", 0, "wall-clock cap per run (0 = engine default)")
-	fs.IntVar(&o.historyWindow, "history-window", 0, "prior steps rehydrated into context (0 = engine default)")
-	fs.IntVar(&o.contextWindow, "context-window", 0, "the model's context size in tokens — sizes the prompt budget, compaction, and log limits to it (0 = assume a large window)")
+	fs.IntVar(&o.historyWindow, "history-window", 0, "prior steps rehydrated into context (0 = engine default; overrides --context-window's derived value)")
+	fs.IntVar(&o.contextWindow, "context-window", 0, "the model's SERVED context size in tokens — sizes the prompt budget, compaction, and log limits to it (0 = assume a large window)")
 	fs.StringVar(&o.session, "session", "", "session id to run under (default: generated)")
 	fs.StringVar(&o.cwd, "cwd", "", "workspace root for AGENTS.md / SKILL.md discovery (default: current directory)")
 	fs.StringVar(&o.db, "db", "", "session database path (default: $AGENTLOOP_DB, else a per-user location)")
@@ -302,10 +302,14 @@ func newSession(o *options, warn func(string), in *bufio.Reader) (*session, erro
 	}
 
 	// Sized runs excerpt the instruction files and let the agent pull the
-	// rest with projectGet(). Inlining a large AGENTS.md in full would
-	// undo the budget before the conversation started — and being trimmed
-	// away by the budget instead would lose it outright, since the
-	// budget drops rather than summarizes.
+	// rest with projectGet().
+	//
+	// Not merely to save tokens: RunRequest.Context is appended to the
+	// SYSTEM prompt, and the budget never drops that — it is what
+	// carries the run()/answer() protocol and the whole tool surface. So
+	// an oversized AGENTS.md is not a prompt that gets trimmed, it is a
+	// prompt that cannot be sent, and no budget setting rescues it. The
+	// excerpt is the only thing that does.
 	projectCx := projectctx.Render(docs)
 	if o.sized() {
 		projectCx = projectctx.RenderCatalog(docs)
@@ -374,6 +378,13 @@ func (o *options) loopConfig(client llm.Client, caps []agentloop.Capability, ses
 		// same client is right for the local-server case this flag
 		// exists for; the library API is where a different summarizer
 		// goes.
+		//
+		// Installed BEFORE Apply, not after: Apply configures whatever
+		// compactor it finds, so one installed afterwards would keep the
+		// frontier-sized defaults this invocation just said it does not
+		// have. No "don't clobber an existing one" guard is needed —
+		// loopConfig builds the Config it returns, so there is never one
+		// to clobber.
 		cfg.Compactor = &agentloop.SummarizingCompactor{LLM: client}
 	}
 	o.profile().Apply(&cfg)
