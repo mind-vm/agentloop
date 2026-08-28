@@ -284,6 +284,28 @@ func TestHumanRendererSeparatesStreams(t *testing.T) {
 	}
 }
 
+// --context-window sizes a budget that trims the oldest turns to fit.
+// That is a change to what the model can see, so it is reported rather
+// than left to be inferred from a worse answer.
+func TestHumanRendererReportsABudgetTrim(t *testing.T) {
+	var out, errOut bytes.Buffer
+	h := &humanRenderer{out: &out, errOut: &errOut}
+
+	h.event(agentloop.RunEvent{Type: "budget_trimmed", Args: map[string]any{
+		"messages_dropped": 4, "estimated_tokens": 3900, "allowance": 3850,
+	}})
+
+	got := errOut.String()
+	for _, want := range []string{"context budget", "4", "3900", "3850"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stderr missing %q, got %q", want, got)
+		}
+	}
+	if out.Len() != 0 {
+		t.Errorf("a trim notice belongs on stderr, not in the answer: %q", out.String())
+	}
+}
+
 func TestHumanRendererQuietWritesOnlyTheAnswer(t *testing.T) {
 	var out, errOut bytes.Buffer
 	h := &humanRenderer{out: &out, errOut: &errOut, quiet: true}

@@ -62,6 +62,13 @@ func (h *humanRenderer) event(evt agentloop.RunEvent) {
 		h.frame("result", evt.Content)
 	case "compacted":
 		h.line("compacted history: %v → %v messages", evt.Args["messages_before"], evt.Args["messages_after"])
+	case "budget_trimmed":
+		// The loop drops the oldest turns to fit the window. A silently
+		// shortened prompt is how an agent comes to answer confidently
+		// from a transcript it no longer has, so this reads like the
+		// compaction line beside it.
+		h.line("context budget: dropped %v older message(s) — ~%v tokens against an allowance of %v",
+			evt.Args["messages_dropped"], evt.Args["estimated_tokens"], evt.Args["allowance"])
 	case "sandbox_event":
 		kind, _ := evt.Args["kind"].(string)
 		if sandboxEventNoise[kind] || strings.TrimSpace(evt.Content) == "" {
