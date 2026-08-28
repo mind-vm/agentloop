@@ -1,7 +1,8 @@
 # site
 
 The documentation site: [Astro](https://astro.build) with
-[Starlight](https://starlight.astro.build).
+[Starlight](https://starlight.astro.build), styled with
+[Tailwind](https://tailwindcss.com).
 
 ```bash
 npm install
@@ -26,6 +27,25 @@ rather than growing this site's page count by hand indefinitely.
 | `concepts/` | Why JavaScript instead of tool calls; what each package does |
 | `extending/` | Capabilities, sandbox composition, stores, policy |
 | `reference/` | Known limitations, license, links to pkg.go.dev and GitHub |
+
+## Styling
+
+Starlight owns the layout and supplies the default theme; Tailwind supplies
+utility classes on top of it. `src/styles/global.css` is the single entry
+point, registered via Starlight's `customCss` in `astro.config.mjs` so it
+lands in the right cascade layer — utilities can then override a Starlight
+component style without `!important`.
+
+Two things there are load-bearing and explained in the file itself: the
+`@layer` order declaration, and the fact that Tailwind's Preflight is
+deliberately *not* imported (it would reset the typographic defaults
+Starlight uses to render prose).
+
+`@astrojs/starlight-tailwind` bridges the two systems, mapping Tailwind's
+`@theme` tokens onto the CSS variables Starlight's components read — so
+`bg-accent-600` and Starlight's own accent colour are the same colour.
+Retheme the site by overriding `--color-accent-*` / `--color-gray-*` in an
+`@theme` block in `global.css`, not by overriding `--sl-*` variables.
 
 ## Deployment
 

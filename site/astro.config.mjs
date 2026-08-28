@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import tailwindcss from "@tailwindcss/vite";
 
 import { base, site } from "./site.config.mjs";
 
@@ -19,6 +20,11 @@ export default defineConfig({
       description:
         "A small Go engine for LLM agents that think by writing JavaScript " +
         "instead of calling named tools.",
+      // Tailwind's entry point. Registered through Starlight rather than a
+      // bare stylesheet import so it lands in Starlight's own cascade layer
+      // order — ahead of the built-in theme, which is what lets a utility
+      // class win against a Starlight component style without `!important`.
+      customCss: ["./src/styles/global.css"],
       social: [
         { icon: "github", label: "GitHub", href: "https://github.com/mind-vm/agentloop" },
       ],
@@ -60,4 +66,11 @@ export default defineConfig({
       ],
     }),
   ],
+  // Tailwind v4 is a Vite plugin, not an Astro integration — there is no
+  // @astrojs/tailwind package to add to `integrations` any more. It scans the
+  // project for class names itself, so there is no content globbing to keep
+  // in sync here.
+  vite: {
+    plugins: [tailwindcss()],
+  },
 });
