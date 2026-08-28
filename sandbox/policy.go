@@ -78,9 +78,9 @@ func (s *Sandbox) CheckPolicyOrPanic(rt *goja.Runtime, ctx context.Context, tool
 }
 
 // URLAllowlistPolicy is a stateless, in-memory checker that allows
-// fetch() / require('http') to call exactly the URL prefixes in
-// AllowedPrefixes. Other tool names always allow (the canonical
-// use is to compose it under MultiPolicy alongside a stricter
+// fetch() / require('http') / browser navigation to reach exactly the
+// URL prefixes in AllowedPrefixes. Other tool names always allow (the
+// canonical use is to compose it under MultiPolicy alongside a stricter
 // product-side checker).
 //
 // The decision is encoded so the fetch pack can read the allowlist
@@ -90,11 +90,11 @@ type URLAllowlistPolicy struct {
 	AllowedPrefixes []string
 }
 
-// Check implements PolicyChecker. fetch and the http module honour
-// the allowlist; everything else passes through.
+// Check implements PolicyChecker. fetch, the http module, and browser
+// navigation honour the allowlist; everything else passes through.
 func (p URLAllowlistPolicy) Check(_ context.Context, toolName string, args map[string]any) (PolicyCheckResult, error) {
 	// For non-URL tools, this checker is transparent.
-	if toolName != "fetch" && toolName != "http" && toolName != "_http" {
+	if toolName != "fetch" && toolName != "http" && toolName != "_http" && toolName != "browser" {
 		return PolicyCheckResult{Allowed: true}, nil
 	}
 
