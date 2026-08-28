@@ -23,12 +23,22 @@ func (allowAllPolicy) Check(context.Context, string, map[string]any) (PolicyChec
 }
 
 // sideEffectTools are the primitives DefaultPolicy denies unless
-// explicitly granted: they move data out of the run (sendEmail) or pull
-// sensitive material into it (secret). fetch/http are handled by the
-// URL rules instead.
+// explicitly granted: they move data out of the run (sendEmail), pull
+// sensitive material into it (secret), or change something on disk that
+// will still be changed after the run ends (writeFile, editFile).
+// fetch/http are handled by the URL rules instead.
+//
+// Workspace READS are deliberately absent. A read confined to the
+// workspace root cannot reach anything the user did not point the agent
+// at, and gating it would mean a permission prompt per file — which in
+// practice trains people to approve without reading. The mutations are
+// where the consequence is.
 var sideEffectTools = map[string]bool{
 	"sendEmail": true,
 	"secret":    true,
+	"writeFile": true,
+	"editFile":  true,
+	"exec":      true,
 }
 
 // DefaultPolicy is the conservative PolicyChecker agentloop's Loop
@@ -56,6 +66,17 @@ type DefaultPolicy struct {
 	// listing an internal URL is a conscious decision.
 	URLAllowPrefixes []string
 
+	// AllowCommands grants exec() for these command basenames, e.g.
+	// {"go", "git"}. It is checked before AllowTools, so a caller can
+	// permit a few known tools without granting exec() outright — which
+	// is the difference between "this agent may run the build" and "this
+	// agent may run anything".
+	//
+	// Matching is on the basename alone: listing "git" allows any git
+	// invocation, with any arguments. That is a real grant, not a narrow
+	// one, and it is worth being deliberate about which names go here.
+	AllowCommands []string
+
 	// AllowPrivateNetworks disables the deny-by-default for loopback,
 	// RFC-1918/ULA, link-local, and *.localhost/*.local/*.internal
 	// targets. Leave false outside local development.
@@ -67,6 +88,11 @@ func (p DefaultPolicy) Check(_ context.Context, toolName string, args map[string
 	switch toolName {
 	case "fetch", "http", "_http":
 		return p.checkURL(args)
+	case "exec":
+		if command, _ := args["command"].(string); command != "" &&
+			slices.Contains(p.AllowCommands, command) {
+			return PolicyCheckResult{Allowed: true}, nil
+		}
 	}
 	if sideEffectTools[toolName] && !slices.Contains(p.AllowTools, toolName) {
 		return PolicyCheckResult{

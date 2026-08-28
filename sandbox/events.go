@@ -48,6 +48,19 @@ const (
 	EventCollRemove EventKind = "collection_remove"
 	// EventAssetWrite fires when asset.write() persists a file.
 	EventAssetWrite EventKind = "asset_created"
+	// EventFileRead is a read of a workspace file — readFile(), and the
+	// directory and search primitives that enumerate one.
+	EventFileRead EventKind = "file_read"
+	// EventFileWrite is a mutation of a workspace file: writeFile() or
+	// editFile(). Distinct from EventFileRead because it is the one a
+	// reviewer of a run's trace actually needs to find.
+	EventFileWrite EventKind = "file_write"
+	// EventExec fires when exec() starts a command, before it runs.
+	// Emitted separately from its result so a trace shows what was
+	// started even if the run never gets to finish it.
+	EventExec EventKind = "exec"
+	// EventExecResult carries a finished command's exit status.
+	EventExecResult EventKind = "exec_result"
 	// EventBlock carries a structured render block (chart/table/process-map/
 	// sql/…) emitted by a pack for a rich UI to render. Summary names the block
 	// type; the structured spec rides in Event.Payload.

@@ -33,15 +33,26 @@ is kept verbatim) and large data never appears in the context window twice.
 - **`agentloopmem`** — in-memory `SessionStore` / `StepStore` for local
   dev, one-shot CLIs, and eval suites. Not for production traffic (no
   durability, no cross-process visibility).
-- **`agentlooptest`** — `StepStoreContract`, a reusable conformance test
-  harness. Point it at your own `StepStore` implementation (Postgres,
-  SQLite, whatever) to hold it to the same behavioural guarantees the
-  loop relies on — see `agentloopmem`'s own `contract_test.go` for the
-  worked example.
+- **`agentloopsql`** — the durable counterpart: one SQLite-backed
+  `*Store` implementing both interfaces, plus the listing and deletion a
+  session manager needs. Uses `modernc.org/sqlite`, a pure-Go driver, so
+  a binary embedding it still cross-compiles with nothing but `GOOS` and
+  `GOARCH`. Several processes can share one database.
+- **`agentlooptest`** — `StepStoreContract` and `SessionStoreContract`,
+  reusable conformance test harnesses. Point them at your own store
+  implementations (Postgres, SQLite, whatever) to hold them to the same
+  behavioural guarantees the loop relies on — see `agentloopmem`'s own
+  `contract_test.go` for the worked example, and `agentloopsql` for a
+  second implementation held to exactly the same bar.
 - **`ext`** — optional `sandbox.Pack`s that are generically useful but
   don't belong in the core sandbox package: `EmailPack` (`sendEmail`),
   `SecretPack` (`secret`), `SearchPack` (`documentSearch`), `StoresPack`
-  (`stores.list`/`stores.read`), and `OpenAPIPack`, which generates a
+  (`stores.list`/`stores.read`), `WorkspacePack` (`readFile`,
+  `writeFile`, `editFile`, `listDir`, `glob`, `grep` — confined to one
+  directory by `os.Root`, so `..` and symlinks cannot escape it),
+  `ExecPack` (`exec` — argv only, allowlisted environment, capped
+  output, and a timeout that reclaims the whole process group), and
+  `OpenAPIPack`, which generates a
   `require()`-able skill — one JS function per operation — from an
   OpenAPI 3 document. Each takes a callback, small interface, or (for
   `OpenAPIPack`) a parsed spec, same decoupling the core packs use, so
@@ -122,6 +133,172 @@ export OPENAI_CHAT_MODEL=google/gemini-2.5-flash
 A failed request is retried up to three times by default — set
 `OPENAI_MAX_RETRIES` (or `llm.Config.MaxRetries`) to tune that, or to
 `0` to turn retrying off entirely.
+
+## The CLI
+
+[`cmd/agentloop`](cmd/agentloop) is the engine as a command. It discovers
+`AGENTS.md` and `SKILL.md` from a workspace directory, composes the
+default capability bundle, and runs turns:
+
+```sh
+go install github.com/mind-vm/agentloop/cmd/agentloop@latest
+
+agentloop "What's 12 * 7? Reply with just the number."
+agentloop chat
+agentloop doctor
+```
+
+There are two output modes. By default the loop's activity streams to
+stderr and **stdout carries only the agent's answer**, so
+`answer=$(agentloop run "...")` captures what you would expect and
+nothing else — no banner, no framing. With `--json`, stdout becomes a
+newline-delimited stream of every run event followed by a terminal
+`result` object, which is the mode another program should drive:
+
+```sh
+agentloop run --json "summarise this repo" | jq -c 'select(.type=="result")'
+```
+
+The exit code distinguishes how the run ended, so a script never has to
+parse output to find out: `0` completed, `1` error, `2` max iterations
+reached, `3` usage. `agentloop help` lists the flags — they map directly
+onto `agentloop.Config`, so `--max-steps`, `--timeout`, and
+`--history-window` mean exactly what `MaxIterations`, `RunTimeout`, and
+`HistoryWindow` mean in Go.
+
+`--context-window` is the exception: it maps onto no single field but
+onto `ProfileFor`, deriving the token budget, the compaction thresholds,
+the per-turn log cap, and how much of an `AGENTS.md` rides in the prompt
+from the model's window. It also does two things a profile cannot
+express as a number — installs a compactor, and switches project
+instructions to retrieval mode (excerpt in the prompt, the rest behind
+`projectGet()`). Set it for a locally hosted model; left unset every one
+of those settings keeps a default that assumes a large window. An
+explicit `--history-window` overrides the derived one.
+
+```sh
+agentloop --context-window 8192 --timeout 30m "..."
+```
+
+`agentloop doctor` reports the resolved endpoint and model, makes one
+real request to confirm the endpoint answers (`--offline` skips it), and
+lists the project instructions and skills it found in the workspace.
+
+Sessions are durable. Every run is recorded in a SQLite database, so
+`--session <id>` extends a conversation across separate invocations and
+`--continue` picks up the most recent one:
+
+```sh
+agentloop run --session review "read the diff and tell me what changed"
+agentloop run --continue "now check the tests cover it"
+
+agentloop sessions ls
+agentloop sessions show review
+agentloop sessions rm review
+```
+
+The database lives at `$AGENTLOOP_DB`, else `$XDG_DATA_HOME/agentloop/`,
+else the platform's per-user application directory — `--db` overrides
+all three. `--ephemeral` runs against in-memory stores instead and
+writes nothing, for a turn that should leave no trace.
+
+### The workspace
+
+`--cwd` (default: the current directory) is the project the agent reads
+and edits. It gets `readFile`, `writeFile`, `editFile`, `listDir`,
+`glob`, and `grep`, all resolved through an `os.Root` handle — so `..`,
+an absolute path, and a symlink pointing outside are refused by the
+runtime rather than by path arithmetic that has to be got right. `.git`
+is never walked: not source, frequently enormous, and its config can
+hold credentials.
+
+Reads are ungated. Writes and edits are not: they are denied by the
+default policy and become a permission prompt naming the file. A read
+confined to the workspace cannot reach anything you did not point the
+agent at, while a prompt per file would train you to approve without
+reading — the mutations are where the consequence is.
+
+`editFile` requires its target text to appear exactly once, and refuses
+the edit otherwise rather than guessing. `--no-network` removes `fetch`
+and `require('http')` entirely, for a tree whose contents should not be
+able to leave the machine.
+
+### Running commands
+
+`exec(argv)` runs a command and returns `{stdout, stderr, code, timedOut}`.
+A non-zero exit is a *result*, not an error — a failing build is the
+information the agent asked for:
+
+```js
+const r = exec(["go", "test", "./..."]);
+if (r.code !== 0) log(r.stderr);
+```
+
+Every call is asked about, showing the full command, because the
+arguments are most of what there is to judge. `--allow-exec go,git`
+pre-approves by command name, which is the difference between "this
+agent may run the build" and "this agent may run anything".
+`--no-exec` removes the primitive entirely.
+
+There is no shell: argv is an array, so a model-authored string never
+becomes a command line. `--dangerously-allow-shell` opts back in. Note
+that this is a convenience, not a boundary — an agent can still ask to
+run `["sh", "-c", "…"]`, and the approval prompt showing the whole
+command is what actually stands between that and running.
+
+The child gets an allowlisted environment — `PATH`, `HOME`, locale and
+little else — so the agent's own API key is absent by construction
+rather than by remembering to strip it. Output is capped per stream and
+truncated with a marker. A command that outlives its timeout is killed
+along with everything it spawned, so a build tool cannot leave its
+compiler running.
+
+Unlike the workspace primitives, `exec` is **not confined to `--cwd`**.
+Once another program is running it has the full privileges of the user
+running the agent, and `os.Root` has no say in it. What bounds this is
+the permission prompt and your judgement about which commands to allow.
+
+### Permission prompts
+
+Capabilities that need permission — a `fetch` to a domain the policy has
+not already allowed, or a change to a file — ask at the terminal:
+
+```
+Allow the agent to access example.com? [y/N]
+Allow the agent to modify src/main.go? [y/N]
+```
+
+`--approve` decides how those are answered: `prompt` asks, `auto`
+approves without asking, `deny` refuses without asking. The default
+depends on whether anyone is there to answer — `prompt` at a terminal,
+`deny` otherwise — so an unattended run fails closed rather than
+blocking forever on an answer nobody will give. Asking for `--approve
+prompt` with stdin redirected is an error rather than a silent
+downgrade.
+
+An approval is remembered for the rest of the session, including across
+invocations, so resuming does not re-ask. A refusal holds for the rest
+of that invocation — the loop re-runs a turn that threw, and re-asking
+on every retry is how you get trained to hit `y` without reading — but
+is never persisted, so a later run is free to allow what an earlier one
+declined. `agentloop sessions show <id>` lists what a session has
+approved and `agentloop sessions revoke <id>` forgets it.
+
+[`examples/cli`](examples/cli) stays as the minimal library demo — one
+`Run` call in 100 lines, which is the thing to read when embedding the
+engine rather than running it.
+
+## Contributing
+
+[`AGENTS.md`](AGENTS.md) holds the conventions this codebase is written to —
+what belongs in `sandbox` versus `ext`, which seams to reach for, and the
+handful of behaviours that are load-bearing in ways the types do not show.
+It is written for an agent working here, and is the fastest orientation for
+a person too.
+
+CI runs `gofmt`, `go vet`, and `go test -race` on Linux and macOS, and
+cross-compiles for every target the CLI is released for — which is what
+catches a build-tag mistake in the platform-specific files.
 
 ## Extending
 

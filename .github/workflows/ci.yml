@@ -1,0 +1,83 @@
+# Build, vet, and test the Go module on every push and pull request.
+#
+# Deliberately not filtered by path. A docs-only change cannot break the
+# library, but a required check that skips itself reports "pending" forever
+# and has to be overridden by hand — which trains people to override it. The
+# job takes under a minute; running it always is cheaper than that habit.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Two operating systems because the exec pack is not portable by
+    # accident: process-group handling is behind a build tag, and a change
+    # that compiles on one Unix can still be wrong on another.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          # Tracks go.mod rather than pinning here, so the toolchain cannot
+          # drift away from what the module says it needs.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # The race detector earns its runtime here: the sandbox is driven from
+      # the loop's goroutines, the exec pack reads two pipes while waiting on
+      # a process, and SQLite is reached from several at once.
+      - name: Test
+        run: go test -race -timeout 10m ./...
+
+  # Compile for every target the CLI is released for. This is what catches a
+  # build-tag mistake in the platform-specific exec files, which the test job
+  # above cannot see because it only ever builds for its own host.
+  cross-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build ./...

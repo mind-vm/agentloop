@@ -39,13 +39,18 @@ export default defineConfig({
       editLink: {
         baseUrl: "https://github.com/mind-vm/agentloop/edit/main/site/",
       },
-      // Four groups, in the order a reader meets them: why (Concepts), how to
-      // get running (Start here), how to plug application-specific pieces in
-      // (Extending), and exactly what's available (Reference).
+      // Five groups, in the order a reader meets them: how to get running
+      // (Start here), how to drive it from a terminal (The CLI), why
+      // (Concepts), how to plug application-specific pieces in (Extending),
+      // and exactly what's available (Reference).
       sidebar: [
         {
           label: "Start here",
           items: [{ autogenerate: { directory: "start" } }],
+        },
+        {
+          label: "The CLI",
+          items: [{ autogenerate: { directory: "cli" } }],
         },
         {
           label: "Concepts",

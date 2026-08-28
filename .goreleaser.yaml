@@ -1,0 +1,64 @@
+# GoReleaser builds the agentloop CLI for a tagged release.
+#
+# The library needs nothing from this — a v* tag is already a Go module
+# version, and `go get` works whether or not a release exists. This exists so
+# people who want the command do not have to install a Go toolchain first.
+version: 2
+
+project_name: agentloop
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: agentloop
+    main: ./cmd/agentloop
+    binary: agentloop
+    env:
+      # Pure-Go all the way down, which is why the SQLite driver is
+      # modernc.org/sqlite rather than a cgo binding. It makes every target
+      # below a matter of GOOS and GOARCH, with no cross-compiler to install
+      # and no glibc version baked into the artifact.
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      # Windows on ARM is not a platform this has ever been run on; shipping
+      # an untested binary is worse than shipping none.
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      # -X stamps the version main.versionString() prefers over the build
+      # info it otherwise infers. -s -w drop the symbol and DWARF tables,
+      # which a CLI has no use for.
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: agentloop
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
