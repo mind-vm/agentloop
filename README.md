@@ -156,6 +156,37 @@ A failed request is retried up to three times by default — set
   what is replayed to the model changes. Compaction is best-effort — a
   failure emits a `warning` event and the run proceeds on the
   uncompacted history.
+- **Token budget** — `HistoryWindow` and the compactor both count
+  *messages*, which says nothing about how many *tokens* those messages
+  occupy: the same 60-turn history is trivial against a frontier model
+  and a hard overflow against a locally hosted one. Set
+  `Config.ContextBudget` to bound each turn's prompt in tokens instead.
+  `MaxTokens` is the window the model is actually served with (for a
+  local runtime, the server's configured context size — llama.cpp's
+  `--ctx-size`, Ollama's `num_ctx` — not the figure on the model card),
+  and `Reserve` is what's held back for the completion (default
+  `MaxTokens/8`, clamped to `[512, 4096]`); the reserve is also sent as
+  the request's output cap, so a long answer can't overrun the room made
+  for it. The zero value is disabled, so adding a budget changes nothing
+  until `MaxTokens` is set.
+
+  The trim runs immediately before each request — after compaction,
+  after stale-code elision, and after this run's own turns have grown
+  the history, which is the only point where the real size is knowable.
+  The system prompt and the current turn are never dropped; the oldest
+  conversational turns go first, an execution result is never stranded
+  from the `run()` block that produced it, and a marker tells the model
+  how many turns are gone so it doesn't quietly assume what they
+  contained. Every trim emits a `budget_trimmed` event and every turn
+  span carries `agentloop.budget.estimated_tokens` against
+  `agentloop.budget.allowance`, so headroom is observable before a
+  session starts losing history. Sizing uses a crude bytes/4 estimate by
+  default — supply `ContextBudget.Estimate` to plug in a real tokenizer
+  and fill the window tighter.
+
+  This is a backstop, not a replacement for compaction: the compactor
+  preserves meaning, the budget only guarantees the request is sendable.
+  Configure both.
 - **Project instructions** — `projectctx.Load(cwd)` walks from the
   repository root down to `cwd` collecting `AGENTS.md` files (general
   first, most specific last), and `projectctx.Render(docs)` turns them

@@ -98,6 +98,21 @@ type Config struct {
 	// the uncompacted history.
 	Compactor Compactor
 
+	// ContextBudget bounds each turn's prompt in TOKENS, as a hard
+	// backstop under HistoryWindow and Compactor — both of which count
+	// MESSAGES and so cannot tell a forty-token turn from a
+	// four-thousand-token one. Optional; the zero value is disabled and
+	// preserves the prior behaviour exactly.
+	//
+	// Enabling it is what turns a context overflow from a provider
+	// error (or a silent server-side truncation) into a deliberate,
+	// observable trim: the oldest turns are dropped, the model is told
+	// how many, and a "budget_trimmed" event reports it. Set
+	// MaxTokens to the window the model is actually SERVED with — for a
+	// local runtime that is the server's configured context size, not
+	// the figure on the model card.
+	ContextBudget ContextBudget
+
 	// Now is a clock seam for tests. Nil uses time.Now.
 	Now func() time.Time
 
@@ -172,6 +187,13 @@ func New(cfg Config) Loop {
 	}
 	if cfg.HistoryWindow <= 0 {
 		cfg.HistoryWindow = HistoryWindow
+	}
+	// A reserve that swallows the whole window leaves no room for the
+	// prompt, so every request would be "over budget" from the first
+	// turn. That is a configuration error, not a degraded mode, and it
+	// surfaces at boot like the missing-dependency panics above.
+	if cfg.ContextBudget.enabled() && cfg.ContextBudget.allowance() <= 0 {
+		panic("agentloop: Config.ContextBudget.Reserve leaves no room for the prompt")
 	}
 	if cfg.Policy == nil {
 		cfg.Policy = sandbox.DefaultPolicy{}
@@ -378,9 +400,22 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 				dataBytesCarried += delta
 			}
 		}
+		// The single chokepoint where a prompt is bounded in tokens.
+		// Everything that grows it has already happened by here —
+		// rehydration, compaction, this run's own turns, elision, the
+		// args digest — so this is the only place the real size is
+		// knowable.
+		messages = l.fitBudget(messages, req, turnSpan)
+
 		llmReq := llm.CompletionRequest{
 			Messages: messages,
 			Model:    model,
+		}
+		// Reserve is only a guarantee if the completion is actually
+		// held to it; left unset, a long answer overruns the room the
+		// trim just made for it.
+		if outCap, ok := l.cfg.ContextBudget.completionCap(); ok {
+			llmReq.MaxTokens = &outCap
 		}
 
 		llmCtx, llmSpan := l.tracer.Start(tctx, spanLLMCall, trace.WithAttributes(
@@ -657,6 +692,50 @@ func redactEvent(r *redact.Redactor, evt RunEvent) RunEvent {
 		}
 	}
 	return evt
+}
+
+// fitBudget applies Config.ContextBudget to one turn's assembled
+// request, returning what to send.
+//
+// A trim is reported, never silent: dropping the early conversation is
+// exactly the kind of degradation that otherwise shows up much later
+// as an agent that has forgotten what it was asked. The event carries
+// the numbers an operator needs to decide whether to raise the window,
+// register fewer packs, or lower HistoryWindow so compaction — which
+// preserves meaning, unlike this — does the work instead.
+func (l *loop) fitBudget(messages []llm.Message, req RunRequest, span trace.Span) []llm.Message {
+	fit := l.cfg.ContextBudget.fit(messages)
+	if !l.cfg.ContextBudget.enabled() {
+		return fit.Messages
+	}
+	span.SetAttributes(
+		attribute.Int(attrBudgetTokens, fit.Tokens),
+		attribute.Int(attrBudgetAllowance, l.cfg.ContextBudget.allowance()),
+		attribute.Int(attrBudgetDropped, fit.Dropped),
+	)
+	if fit.Dropped > 0 {
+		l.emit(req.OnEvent, RunEvent{
+			Type: "budget_trimmed",
+			Args: map[string]any{
+				"messages_dropped": fit.Dropped,
+				"estimated_tokens": fit.Tokens,
+				"allowance":        l.cfg.ContextBudget.allowance(),
+			},
+		})
+	}
+	if fit.Over {
+		// Nothing droppable is left, so this warns and sends anyway
+		// rather than failing the run: the request may still succeed
+		// (the estimate is deliberately pessimistic), and a provider
+		// error is a better outcome than refusing to try.
+		l.emit(req.OnEvent, RunEvent{
+			Type: "warning",
+			Content: fmt.Sprintf(
+				"context budget: prompt is ~%d tokens against an allowance of %d with nothing left to drop — the system prompt and current turn alone exceed the window",
+				fit.Tokens, l.cfg.ContextBudget.allowance()),
+		})
+	}
+	return fit.Messages
 }
 
 // compactHistory hands the rehydrated history to Config.Compactor,

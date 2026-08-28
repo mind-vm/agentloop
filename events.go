@@ -13,6 +13,10 @@ package agentloop
 //	data_update       the agent's carried data changed; Args = new value
 //	compacted         history was summarized before the run's turns;
 //	                  Args = {"messages_before", "messages_after"}
+//	budget_trimmed    a turn's prompt exceeded Config.ContextBudget and
+//	                  the oldest turns were dropped to fit; Args =
+//	                  {"messages_dropped", "estimated_tokens",
+//	                  "allowance"}
 //	response          final markdown answer; Content = the answer
 //	response_chunk    streamed token from a final-text turn;
 //	                  Content = the chunk (no Args)
