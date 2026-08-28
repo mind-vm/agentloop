@@ -59,6 +59,10 @@ believes in.
 - **A pack's `Prompt` is the model's entire interface** to that pack.
   TypeScript `declare` lines, because the model recognises the shape. If the
   prompt and the code disagree, the model believes the prompt.
+- **`fetch` lowercases response header keys**, web-style, so a script
+  indexing them by the name the server sent reads `undefined`.
+- **`parseUrl` returns `null`, never throws**, for anything without a host —
+  including an absolute path like `/a/b`.
 
 ## Verify by running it
 
