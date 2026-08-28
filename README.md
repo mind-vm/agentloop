@@ -475,6 +475,14 @@ None of these are architectural dead ends — they're the natural next
 layer (suspend/resume, batched I/O primitives, resource quotas, budget
 enforcement) to add on top if/when you need them.
 
+## Design decisions
+
+The load-bearing choices here — code-as-action, return-threading, stale-code
+elision, the synchronous goja runtime, the context-economy layers — are recorded
+with their reasoning and their price in [`docs/adr`](docs/adr). Start with the
+[index](docs/adr/README.md); the *What would change our mind* section of each
+record is where it says what would make it wrong.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
