@@ -249,6 +249,10 @@ hence `p.MaxLogBytes` and `p.ProjectInlineBytes` passed by hand above.
 A profile is a starting point, not a constraint. Read the fields and
 override what your workload justifies.
 
+The [CLI](/cli/) wires the same thing behind one flag —
+`agentloop --context-window 8192` — including installing a compactor and
+switching project instructions to retrieval mode.
+
 ## The lever a profile can't pull
 
 **How many packs you register.** `DefaultCapabilities` alone costs ~1,310

@@ -35,6 +35,14 @@ type options struct {
 	maxSteps      int
 	timeout       time.Duration
 	historyWindow int
+
+	// contextWindow is the model's context size in tokens. It is not a
+	// setting of its own so much as the input to several: given one,
+	// agentloop.ProfileFor derives the token budget, the compaction
+	// thresholds, the per-turn log cap, and how much of an AGENTS.md
+	// rides in the prompt. Zero leaves every one of them at its engine
+	// default, which assumes a frontier-sized window.
+	contextWindow int
 	session       string
 	cwd           string
 	db            string
@@ -69,6 +77,7 @@ func (o *options) bind(fs *flag.FlagSet) {
 	fs.IntVar(&o.maxSteps, "max-steps", 0, "cap LLM round-trips per run (0 = engine default)")
 	fs.DurationVar(&o.timeout, "timeout", 0, "wall-clock cap per run (0 = engine default)")
 	fs.IntVar(&o.historyWindow, "history-window", 0, "prior steps rehydrated into context (0 = engine default)")
+	fs.IntVar(&o.contextWindow, "context-window", 0, "the model's context size in tokens — sizes the prompt budget, compaction, and log limits to it (0 = assume a large window)")
 	fs.StringVar(&o.session, "session", "", "session id to run under (default: generated)")
 	fs.StringVar(&o.cwd, "cwd", "", "workspace root for AGENTS.md / SKILL.md discovery (default: current directory)")
 	fs.StringVar(&o.db, "db", "", "session database path (default: $AGENTLOOP_DB, else a per-user location)")
@@ -113,8 +122,8 @@ func (o *options) resolve() error {
 		}
 		o.db = path
 	}
-	if o.maxSteps < 0 || o.historyWindow < 0 || o.timeout < 0 {
-		return errors.New("--max-steps, --history-window and --timeout cannot be negative")
+	if o.maxSteps < 0 || o.historyWindow < 0 || o.timeout < 0 || o.contextWindow < 0 {
+		return errors.New("--max-steps, --history-window, --timeout and --context-window cannot be negative")
 	}
 
 	approval, err := resolveApprovalMode(o.approve, isTerminal(os.Stdin))
@@ -263,7 +272,10 @@ func newSession(o *options, warn func(string), in *bufio.Reader) (*session, erro
 	// Project instructions and skills are layered capabilities: the loop
 	// knows nothing about either. The chat surface discovers them and
 	// passes one as prompt text and the other as capabilities.
-	docs, err := projectctx.Load(o.cwd)
+	//
+	// InlineBytes only governs RenderCatalog, so setting it here is inert
+	// until `sized` switches the render mode below.
+	docs, err := projectctx.Loader{InlineBytes: o.profile().ProjectInlineBytes}.Load(o.cwd)
 	if err != nil && warn != nil {
 		warn(err.Error())
 	}
@@ -289,7 +301,17 @@ func newSession(o *options, warn func(string), in *bufio.Reader) (*session, erro
 		return nil, fmt.Errorf("cannot open the workspace %s: %w", o.cwd, err)
 	}
 
-	sess := &session{projectCx: projectctx.Render(docs), id: id, store: store, root: root}
+	// Sized runs excerpt the instruction files and let the agent pull the
+	// rest with projectGet(). Inlining a large AGENTS.md in full would
+	// undo the budget before the conversation started — and being trimmed
+	// away by the budget instead would lose it outright, since the
+	// budget drops rather than summarizes.
+	projectCx := projectctx.Render(docs)
+	if o.sized() {
+		projectCx = projectctx.RenderCatalog(docs)
+	}
+
+	sess := &session{projectCx: projectCx, id: id, store: store, root: root}
 
 	// The prompter reads the session id through a closure because chat's
 	// /new changes it mid-process, and an approval must not carry across
@@ -297,19 +319,71 @@ func newSession(o *options, warn func(string), in *bufio.Reader) (*session, erro
 	prompter := newTerminalPrompter(in, os.Stderr, o.approval, store, func() string { return sess.id })
 	caps := buildCapabilities(o, client, prompter, root, warn)
 	caps = append(caps, skills.Capabilities(sk)...)
+	if o.sized() {
+		// RenderCatalog writes pointers to projectGet(); without these
+		// capabilities those pointers name a function that does not exist.
+		caps = append(caps, projectctx.Capabilities(docs)...)
+	}
 
-	sess.loop = agentloop.New(agentloop.Config{
-		LLM:            client,
-		Sessions:       sessions,
-		Steps:          steps,
-		SandboxBuilder: &agentloop.DefaultSandboxBuilder{Capabilities: caps},
-		Policy:         o.policy(),
-		Model:          o.model,
-		MaxIterations:  o.maxSteps,
-		RunTimeout:     o.timeout,
-		HistoryWindow:  o.historyWindow,
-	})
+	sess.loop = agentloop.New(o.loopConfig(client, caps, sessions, steps))
 	return sess, nil
+}
+
+// profile is the context settings --context-window implies. Pure in o,
+// so every caller derives the same numbers without them having to be
+// threaded around.
+//
+// With the flag unset this is the zero Profile: its Apply does nothing
+// and its byte caps are zero, which every package reads as "use your
+// default" — so an unsized run is configured exactly as it was before
+// the flag existed.
+func (o *options) profile() agentloop.Profile { return agentloop.ProfileFor(o.contextWindow) }
+
+// sized reports whether the user told us the model's context window.
+// It gates the settings a profile cannot express as a number — whether
+// to compact at all, and whether instruction files are excerpted or
+// inlined whole.
+func (o *options) sized() bool { return o.contextWindow > 0 }
+
+// loopConfig assembles the engine configuration for one invocation.
+//
+// Split out of newSession because it is the part worth testing on its
+// own: newSession needs a provider, a database and a workspace, while
+// what the flags settle is exactly this struct.
+func (o *options) loopConfig(client llm.Client, caps []agentloop.Capability, sessions agentloop.SessionStore, steps agentloop.StepStore) agentloop.Config {
+	cfg := agentloop.Config{
+		LLM:      client,
+		Sessions: sessions,
+		Steps:    steps,
+		SandboxBuilder: &agentloop.DefaultSandboxBuilder{
+			Capabilities: caps,
+			MaxLogBytes:  o.profile().MaxLogBytes,
+		},
+		Policy:        o.policy(),
+		Model:         o.model,
+		MaxIterations: o.maxSteps,
+		RunTimeout:    o.timeout,
+		HistoryWindow: o.historyWindow,
+	}
+	if o.sized() {
+		// Apply configures a *SummarizingCompactor's thresholds but will
+		// not install one, so a sized run has to. Without it the budget
+		// would drop old turns that compaction could have kept in
+		// summary — the budget only guarantees the request is sendable,
+		// it is the compactor that preserves meaning. Summarizing on the
+		// same client is right for the local-server case this flag
+		// exists for; the library API is where a different summarizer
+		// goes.
+		cfg.Compactor = &agentloop.SummarizingCompactor{LLM: client}
+	}
+	o.profile().Apply(&cfg)
+	// Apply overwrites HistoryWindow with the profile's derived value, so
+	// an explicit --history-window is restored afterwards: a number the
+	// user typed outranks one the profile inferred.
+	if o.historyWindow > 0 {
+		cfg.HistoryWindow = o.historyWindow
+	}
+	return cfg
 }
 
 // resolveStores opens the backing stores and settles which session this

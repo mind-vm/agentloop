@@ -166,6 +166,20 @@ onto `agentloop.Config`, so `--max-steps`, `--timeout`, and
 `--history-window` mean exactly what `MaxIterations`, `RunTimeout`, and
 `HistoryWindow` mean in Go.
 
+`--context-window` is the exception: it maps onto no single field but
+onto `ProfileFor`, deriving the token budget, the compaction thresholds,
+the per-turn log cap, and how much of an `AGENTS.md` rides in the prompt
+from the model's window. It also does two things a profile cannot
+express as a number — installs a compactor, and switches project
+instructions to retrieval mode (excerpt in the prompt, the rest behind
+`projectGet()`). Set it for a locally hosted model; left unset every one
+of those settings keeps a default that assumes a large window. An
+explicit `--history-window` overrides the derived one.
+
+```sh
+agentloop --context-window 8192 --timeout 30m "..."
+```
+
 `agentloop doctor` reports the resolved endpoint and model, makes one
 real request to confirm the endpoint answers (`--offline` skips it), and
 lists the project instructions and skills it found in the workspace.

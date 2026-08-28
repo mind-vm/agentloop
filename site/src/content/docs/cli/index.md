@@ -153,6 +153,17 @@ stream, so a configuration that will not work says so immediately rather than
 on the first turn.
 
 A locally hosted model works the same way, but needs more than the URL — a
-placeholder key, a longer `--timeout`, and context settings sized to the
-window the server actually serves. See [Running against a local
+placeholder key, a longer `--timeout`, and `--context-window` set to the
+window the server actually serves:
+
+```sh
+agentloop --context-window 8192 --timeout 30m "..."
+```
+
+`--context-window` is the only setting a small model really needs from you.
+From it the CLI sizes the prompt budget, the compaction thresholds, the
+per-turn log cap, and how much of an `AGENTS.md` rides in the prompt versus
+waits behind `projectGet()`; it also installs a compactor, which an unsized
+run does not have. Left unset, every one of those stays at a default that
+assumes a large window. See [Running against a local
 model](/start/local-models/).

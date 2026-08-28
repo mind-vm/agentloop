@@ -206,19 +206,27 @@ func main() {
 ## Using the CLI against a local server
 
 [`agentloop`](/cli/) takes the same `OPENAI_BASE_URL` /
-`OPENAI_CHAT_MODEL` / `OPENAI_API_KEY` environment, and exposes two of the
-settings above as flags:
+`OPENAI_CHAT_MODEL` / `OPENAI_API_KEY` environment, and `--context-window`
+is the same one number this page has been about:
 
 ```sh
-agentloop --timeout 30m --history-window 42 "..."
+agentloop --context-window 8192 --timeout 30m "..."
 ```
 
-It does **not** yet expose the context budget, the compactor, or
-`ProfileFor` — so on a small window the CLI still sends prompts bounded only
-by `--history-window`. Until it does, the settings in this guide are
-available through the Go API only, and `--history-window` set to a profile's
-value (the table on the [context page](/concepts/context/#one-number-all-four))
-is the closest approximation.
+That single flag does everything section 2 describes, and two things a
+profile alone cannot express as a number. It **installs a compactor** —
+without one the budget would drop the early conversation rather than keep it
+in summary, since a budget only guarantees the request is sendable. And it
+**switches project instructions to retrieval mode**: each `AGENTS.md` is
+excerpted into the prompt with the rest behind `projectGet()`, because
+inlining a large one would spend the budget before the conversation started.
+
+`--history-window` still works and wins where the two overlap: the profile
+sets it, then an explicit flag overrides it. Everything else in the profile
+still applies, so overriding one number is not an opt-out of the rest.
+
+Without `--context-window` nothing above changes — no budget, no compactor,
+instruction files inlined whole, engine defaults throughout.
 
 ## Choosing a model
 
