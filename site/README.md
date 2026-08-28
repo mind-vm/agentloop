@@ -1,8 +1,7 @@
 # site
 
 The documentation site: [Astro](https://astro.build) with
-[Starlight](https://starlight.astro.build), styled with
-[Tailwind](https://tailwindcss.com).
+[Starlight](https://starlight.astro.build).
 
 ```bash
 npm install
@@ -31,22 +30,22 @@ rather than growing this site's page count by hand indefinitely.
 
 ## Styling
 
-Starlight owns the layout and supplies the default theme; Tailwind supplies
-utility classes on top of it. `src/styles/global.css` is the single entry
-point, registered via Starlight's `customCss` in `astro.config.mjs` so it
-lands in the right cascade layer — utilities can then override a Starlight
-component style without `!important`.
+There is none of our own, deliberately. Starlight is a complete theme, and
+every page here is prose plus its built-in components — `Card`, `CardGrid`,
+`LinkCard` from `@astrojs/starlight/components`. Reach for those before
+writing markup: they already match the theme and follow the light/dark
+switch.
 
-Two things there are load-bearing and explained in the file itself: the
-`@layer` order declaration, and the fact that Tailwind's Preflight is
-deliberately *not* imported (it would reset the typographic defaults
-Starlight uses to render prose).
+The site did briefly carry Tailwind. It was removed once it was clear that
+exactly one page used it, to reimplement a card that `LinkCard` already
+draws. If a genuinely custom page or component arrives later, Starlight
+supports Tailwind properly (`@astrojs/starlight-tailwind`) and it can come
+back — but two design systems for four documentation pages was not paying
+for itself.
 
-`@astrojs/starlight-tailwind` bridges the two systems, mapping Tailwind's
-`@theme` tokens onto the CSS variables Starlight's components read — so
-`bg-accent-600` and Starlight's own accent colour are the same colour.
-Retheme the site by overriding `--color-accent-*` / `--color-gray-*` in an
-`@theme` block in `global.css`, not by overriding `--sl-*` variables.
+To restyle, override Starlight's `--sl-color-*` custom properties in a
+stylesheet passed to Starlight's `customCss`, rather than introducing a
+second system.
 
 ## Deployment
 

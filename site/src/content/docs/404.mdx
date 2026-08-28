@@ -16,72 +16,44 @@ hero:
     here may be stale.
 ---
 
+import { CardGrid, LinkCard } from "@astrojs/starlight/components";
 import { base } from "../../../site.config.mjs";
 
-export const url = (path) => `${base.replace(/\/$/, "")}/${path}`;
-
-export const destinations = [
-  {
-    title: "Quickstart",
-    body: "Install agentloop, wire up a loop with in-memory stores, and run the example CLI.",
-    href: url("start/"),
-  },
-  {
-    title: "Concepts",
-    body: "Why the model writes JavaScript instead of calling named tools, and what each package does.",
-    href: url("concepts/"),
-  },
-  {
-    title: "Extending",
-    body: "Capabilities, sandbox composition, your own stores, and the policy seam.",
-    href: url("extending/"),
-  },
-  {
-    title: "Reference",
-    body: "Known limitations, license, and the full API on pkg.go.dev.",
-    href: url("reference/"),
-  },
-];
+export const url = (path) => `${base.replace(/\/+$/, "")}/${path}`;
 
 {/*
-  Two things here are deliberate.
+  These hrefs are absolute and built from `base`, unlike every other page,
+  which writes plain Markdown links and lets rehype-base-links.mjs add the
+  prefix. Two reasons it has to be done by hand here.
 
-  `not-content` opts this block out of Starlight's prose styling. Without it
-  Starlight styles the anchors as body links — underlines, its own colours,
-  paragraph margins — and those rules would fight the utilities below.
-
-  Colours come from Starlight's `--sl-color-*` variables rather than Tailwind's
-  own `gray-*` / `accent-*` utilities, because the `--sl-*` ones flip with the
-  light/dark theme while a Tailwind colour utility compiles to one fixed value
-  and would be wrong in one of the two themes. Layout, spacing, and the hover
-  transitions are plain utilities, which is the split that generally holds on
-  this site: Tailwind for structure, Starlight's variables for colour.
+  This page is served for *any* unmatched path, so a relative link would
+  resolve against whatever wrong URL the reader actually hit rather than
+  against the site root. And the rehype plugin only rewrites Markdown links —
+  the JSX below produces a different node type that it deliberately skips.
 */}
 
-<div class="not-content grid gap-4 text-left sm:grid-cols-2">
-  {destinations.map((d) => (
-    <a
-      href={d.href}
-      class="group flex flex-col gap-1 rounded-lg border border-[var(--sl-color-gray-5)] bg-[var(--sl-color-black)] p-4 no-underline transition-colors hover:border-[var(--sl-color-accent)] hover:bg-[var(--sl-color-gray-6)]"
-    >
-      <span class="font-semibold text-[var(--sl-color-white)]">
-        {d.title}{" "}
-        <span class="inline-block transition-transform group-hover:translate-x-0.5">
-          →
-        </span>
-      </span>
-      <span class="text-sm text-[var(--sl-color-gray-3)]">{d.body}</span>
-    </a>
-  ))}
-</div>
+<CardGrid>
+  <LinkCard
+    title="Quickstart"
+    href={url("start/")}
+    description="Install agentloop, wire up a loop with in-memory stores, and run the example CLI."
+  />
+  <LinkCard
+    title="Concepts"
+    href={url("concepts/")}
+    description="Why the model writes JavaScript instead of calling named tools, and what each package does."
+  />
+  <LinkCard
+    title="Extending"
+    href={url("extending/")}
+    description="Capabilities, sandbox composition, your own stores, and the policy seam."
+  />
+  <LinkCard
+    title="Reference"
+    href={url("reference/")}
+    description="Known limitations, license, and the full API on pkg.go.dev."
+  />
+</CardGrid>
 
-<p class="not-content mt-8 text-sm text-[var(--sl-color-gray-3)]">
-  Think something should be here?{" "}
-  <a
-    class="text-[var(--sl-color-accent)] underline underline-offset-2"
-    href="https://github.com/mind-vm/agentloop/issues"
-  >
-    Open an issue
-  </a>
-  .
-</p>
+Think something should be here?
+[Open an issue](https://github.com/mind-vm/agentloop/issues).
