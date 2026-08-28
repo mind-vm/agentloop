@@ -80,7 +80,9 @@ time would pass and then overflow three turns later.
 
 The system prompt and the current turn are never dropped — a request that
 fits by discarding the protocol and the whole tool surface is worse than one
-that overflows. The oldest turns go first, an execution result is never
+that overflows. Note what rides in the system prompt: the pack declarations
+*and* whatever you pass as `RunRequest.Context`, project instructions
+included. None of it is trimmable. The oldest turns go first, an execution result is never
 stranded from the `run()` block that produced it, and a marker tells the
 model how many turns are gone so it doesn't quietly assume what they held.
 
@@ -182,6 +184,14 @@ A typical page-or-two `AGENTS.md` rides along whole and nothing changes. A
 
 The two renderers are alternatives, not a pair. `RenderCatalog` writes
 pointers to `projectGet`, so wire the capabilities alongside it.
+
+:::caution[The budget cannot rescue an oversized instruction file]
+`RunRequest.Context` is appended to the **system prompt**, and the trim
+above never drops that — it is what carries the `run()`/`answer()` protocol
+and the whole tool surface. So a 64 KB `AGENTS.md` inlined whole is not a
+prompt that gets trimmed, it is a prompt that cannot be sent, and no
+`ContextBudget` setting fixes it. Excerpting is the only thing that does.
+:::
 
 ### Per-turn log output
 
