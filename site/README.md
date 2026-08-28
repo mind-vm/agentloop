@@ -23,6 +23,7 @@ rather than growing this site's page count by hand indefinitely.
 | Directory | Contents |
 |---|---|
 | `index.mdx` | The landing page |
+| `404.mdx` | The not-found page — see `disable404Route` in `astro.config.mjs` |
 | `start/` | Install, wire up a loop, run the example CLI |
 | `concepts/` | Why JavaScript instead of tool calls; what each package does |
 | `extending/` | Capabilities, sandbox composition, stores, policy |

@@ -20,6 +20,19 @@ export default defineConfig({
       description:
         "A small Go engine for LLM agents that think by writing JavaScript " +
         "instead of calling named tools.",
+      // The 404 page is src/content/docs/404.mdx, served through the normal
+      // [...slug] route. Starlight otherwise injects a second, higher-priority
+      // /404 route; with a 404 entry in the collection both routes build the
+      // same path, and Astro warns about the collision on every build. The two
+      // render the identical component, so dropping the injected one costs
+      // nothing here and keeps the build log clean.
+      //
+      // Two consequences worth knowing. Deleting 404.mdx now removes the 404
+      // page entirely rather than falling back to Starlight's built-in one.
+      // And the injected route was the one marked `prerender`, which is moot
+      // for this static build but would matter if the site ever moved to SSR —
+      // revisit this line if it does.
+      disable404Route: true,
       // Tailwind's entry point. Registered through Starlight rather than a
       // bare stylesheet import so it lands in Starlight's own cascade layer
       // order — ahead of the built-in theme, which is what lets a utility
