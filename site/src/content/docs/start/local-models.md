@@ -206,19 +206,38 @@ func main() {
 ## Using the CLI against a local server
 
 [`agentloop`](/cli/) takes the same `OPENAI_BASE_URL` /
-`OPENAI_CHAT_MODEL` / `OPENAI_API_KEY` environment, and exposes two of the
-settings above as flags:
+`OPENAI_CHAT_MODEL` / `OPENAI_API_KEY` environment, and `--context-window`
+is step 2 as a flag — the same one number, expanded the same way:
 
 ```sh
-agentloop --timeout 30m --history-window 42 "..."
+agentloop --context-window 8192 --timeout 30m "..."
 ```
 
-It does **not** yet expose the context budget, the compactor, or
-`ProfileFor` — so on a small window the CLI still sends prompts bounded only
-by `--history-window`. Until it does, the settings in this guide are
-available through the Go API only, and `--history-window` set to a profile's
-value (the table on the [context page](/concepts/context/#one-number-all-four))
-is the closest approximation.
+That single flag sets all of it: the context budget, the history window,
+the compactor's message counts, `log()` output, and how much of each
+`AGENTS.md` goes in the prompt. It also installs a
+`SummarizingCompactor` on the same client, with the same window as its own
+budget — so compaction chunks to fit rather than sending one call the
+server rejects. Pass the window the server is **serving**, per the table
+above.
+
+Two things follow from setting it, both of which the Go API leaves to you:
+
+- **Project instructions are excerpted, not inlined whole.** Each
+  `AGENTS.md` goes in down to the profile's inline size, and `projectGet(name)`
+  is offered for the rest. This matters more than it looks: the budget
+  trimmer never drops the system prompt, so an unbounded instruction file on
+  a small window is not a prompt that gets trimmed — it is one that cannot
+  be sent.
+- **`--history-window` still wins where it overlaps.** The profile is
+  applied first and an explicit flag overrides it, so
+  `--context-window 8192 --history-window 40` gets the profile's budget,
+  compaction and log caps with a history window of exactly 40.
+
+What the CLI does not expose is step 4: there is no flag for
+`EnabledCapabilities`, so the full ~1,310-token `declare` surface is sent
+every turn. On a 4k window that is the next thing worth reaching for, and it
+needs the Go API.
 
 ## Choosing a model
 

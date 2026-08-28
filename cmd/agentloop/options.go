@@ -44,6 +44,12 @@ type options struct {
 	jsonStream    bool
 	quiet         bool
 
+	// contextWindow is the model's served context window in tokens, the
+	// one number agentloop.ProfileFor expands into the four settings
+	// that bound a prompt. Zero leaves every one of them at the engine
+	// default, which is what a frontier model wants.
+	contextWindow int
+
 	// approve is the raw --approve value; approval is what resolve
 	// settles it to, including the default that depends on whether
 	// anyone is at the keyboard.
@@ -68,7 +74,8 @@ func (o *options) bind(fs *flag.FlagSet) {
 	fs.StringVar(&o.model, "model", "", "chat model (default: the client's own, from $OPENAI_CHAT_MODEL)")
 	fs.IntVar(&o.maxSteps, "max-steps", 0, "cap LLM round-trips per run (0 = engine default)")
 	fs.DurationVar(&o.timeout, "timeout", 0, "wall-clock cap per run (0 = engine default)")
-	fs.IntVar(&o.historyWindow, "history-window", 0, "prior steps rehydrated into context (0 = engine default)")
+	fs.IntVar(&o.historyWindow, "history-window", 0, "prior steps rehydrated into context (0 = engine default, and overrides --context-window)")
+	fs.IntVar(&o.contextWindow, "context-window", 0, "the model's SERVED context window in tokens; sizes every context setting to it (0 = engine defaults)")
 	fs.StringVar(&o.session, "session", "", "session id to run under (default: generated)")
 	fs.StringVar(&o.cwd, "cwd", "", "workspace root for AGENTS.md / SKILL.md discovery (default: current directory)")
 	fs.StringVar(&o.db, "db", "", "session database path (default: $AGENTLOOP_DB, else a per-user location)")
@@ -113,8 +120,8 @@ func (o *options) resolve() error {
 		}
 		o.db = path
 	}
-	if o.maxSteps < 0 || o.historyWindow < 0 || o.timeout < 0 {
-		return errors.New("--max-steps, --history-window and --timeout cannot be negative")
+	if o.maxSteps < 0 || o.historyWindow < 0 || o.timeout < 0 || o.contextWindow < 0 {
+		return errors.New("--max-steps, --history-window, --timeout and --context-window cannot be negative")
 	}
 
 	approval, err := resolveApprovalMode(o.approve, isTerminal(os.Stdin))
@@ -128,6 +135,34 @@ func (o *options) resolve() error {
 		return errors.New("--no-exec removes exec() entirely, so there is nothing for --allow-exec or --dangerously-allow-shell to permit")
 	}
 	return nil
+}
+
+// applyContext writes the profile derived from --context-window into
+// cfg, and installs the compactor that profile expects to configure.
+//
+// Order matters, and it is the reason this is a function rather than
+// three lines at the call site. Profile.Apply OVERWRITES what it owns,
+// so the compactor has to exist before it runs — a compactor installed
+// afterwards keeps the package defaults, which are sized for a window
+// this invocation just said it does not have — and an explicit
+// --history-window has to be restored after it, or the profile's
+// derived value silently wins over the number the operator typed.
+//
+// A zero profile (no --context-window) writes nothing and installs
+// nothing, so the unset case is exactly today's behaviour.
+func (o *options) applyContext(p agentloop.Profile, cfg *agentloop.Config, client llm.Client) {
+	if p.ContextBudget.MaxTokens > 0 && cfg.Compactor == nil {
+		// Summarizing on the same client is the right default for the
+		// case this flag exists for: one local server, one window. The
+		// profile gives it that window as its own Budget, which is what
+		// makes it chunk to fit rather than send a call the server
+		// rejects.
+		cfg.Compactor = &agentloop.SummarizingCompactor{LLM: client}
+	}
+	p.Apply(cfg)
+	if o.historyWindow > 0 {
+		cfg.HistoryWindow = o.historyWindow
+	}
 }
 
 // splitList parses a comma-separated flag value, ignoring empty entries
@@ -260,10 +295,17 @@ func newSession(o *options, warn func(string), in *bufio.Reader) (*session, erro
 		return nil, err
 	}
 
+	// One number, expanded: the profile settles the context budget, the
+	// history window, the compactor's message counts, the log cap and
+	// how much of an instruction file belongs in the prompt. Derived
+	// first because two of those are needed while building the objects
+	// below, which Profile.Apply deliberately cannot reach into.
+	profile := agentloop.ProfileFor(o.contextWindow)
+
 	// Project instructions and skills are layered capabilities: the loop
 	// knows nothing about either. The chat surface discovers them and
 	// passes one as prompt text and the other as capabilities.
-	docs, err := projectctx.Load(o.cwd)
+	docs, err := projectctx.Loader{InlineBytes: profile.ProjectInlineBytes}.Load(o.cwd)
 	if err != nil && warn != nil {
 		warn(err.Error())
 	}
@@ -289,7 +331,7 @@ func newSession(o *options, warn func(string), in *bufio.Reader) (*session, erro
 		return nil, fmt.Errorf("cannot open the workspace %s: %w", o.cwd, err)
 	}
 
-	sess := &session{projectCx: projectctx.Render(docs), id: id, store: store, root: root}
+	sess := &session{projectCx: renderProjectContext(docs, profile), id: id, store: store, root: root}
 
 	// The prompter reads the session id through a closure because chat's
 	// /new changes it mid-process, and an approval must not carry across
@@ -297,19 +339,49 @@ func newSession(o *options, warn func(string), in *bufio.Reader) (*session, erro
 	prompter := newTerminalPrompter(in, os.Stderr, o.approval, store, func() string { return sess.id })
 	caps := buildCapabilities(o, client, prompter, root, warn)
 	caps = append(caps, skills.Capabilities(sk)...)
+	if profile.ProjectInlineBytes > 0 {
+		// The prompt now carries excerpts, so the rest has to be
+		// reachable: projectGet(name) returns any instruction file in
+		// full. Without this pack an excerpt is simply lost text.
+		caps = append(caps, projectctx.Capabilities(docs)...)
+	}
 
-	sess.loop = agentloop.New(agentloop.Config{
-		LLM:            client,
-		Sessions:       sessions,
-		Steps:          steps,
-		SandboxBuilder: &agentloop.DefaultSandboxBuilder{Capabilities: caps},
-		Policy:         o.policy(),
-		Model:          o.model,
-		MaxIterations:  o.maxSteps,
-		RunTimeout:     o.timeout,
-		HistoryWindow:  o.historyWindow,
-	})
+	cfg := agentloop.Config{
+		LLM:      client,
+		Sessions: sessions,
+		Steps:    steps,
+		SandboxBuilder: &agentloop.DefaultSandboxBuilder{
+			Capabilities: caps,
+			MaxLogBytes:  profile.MaxLogBytes,
+		},
+		Policy:        o.policy(),
+		Model:         o.model,
+		MaxIterations: o.maxSteps,
+		RunTimeout:    o.timeout,
+		HistoryWindow: o.historyWindow,
+	}
+	o.applyContext(profile, &cfg, client)
+
+	sess.loop = agentloop.New(cfg)
 	return sess, nil
+}
+
+// renderProjectContext turns the discovered instruction files into the
+// system-prompt section for them.
+//
+// Which of the two renderings applies follows from the profile. With no
+// --context-window every file goes in whole, as it always has. With one,
+// each is excerpted to the profile's ProjectInlineBytes and the catalog
+// form is used instead — it labels what was cut and points at
+// projectGet for the rest. That distinction is not cosmetic on a small
+// window: the budget trimmer never drops the system prompt, so a
+// 64 KiB AGENTS.md inlined whole is not a prompt that gets trimmed, it
+// is a prompt that cannot be sent.
+func renderProjectContext(docs []projectctx.Doc, p agentloop.Profile) string {
+	if p.ProjectInlineBytes > 0 {
+		return projectctx.RenderCatalog(docs)
+	}
+	return projectctx.Render(docs)
 }
 
 // resolveStores opens the backing stores and settles which session this

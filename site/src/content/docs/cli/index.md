@@ -154,5 +154,18 @@ on the first turn.
 
 A locally hosted model works the same way, but needs more than the URL — a
 placeholder key, a longer `--timeout`, and context settings sized to the
-window the server actually serves. See [Running against a local
-model](/start/local-models/).
+window the server actually serves. That last part is one flag:
+
+```sh
+agentloop --context-window 8192 --timeout 30m "..."
+```
+
+`--context-window` takes the window the server is **serving** — llama.cpp's
+`--ctx-size`, Ollama's `num_ctx` — not the figure on the model card, and
+sizes everything downstream of it: the context budget, the history window,
+the compactor's message counts, `log()` output, and how much of each
+`AGENTS.md` goes in the prompt (the rest stays reachable through
+`projectGet`). It also installs a summarizing compactor on the same client.
+Leave it off for a frontier model, where the defaults already fit; an
+explicit `--history-window` wins over the value it derives. See [Running
+against a local model](/start/local-models/).

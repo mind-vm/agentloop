@@ -14,6 +14,7 @@ import (
 
 	"github.com/mind-vm/agentloop"
 	"github.com/mind-vm/agentloop/agentloopsql"
+	"github.com/mind-vm/agentloop/projectctx"
 )
 
 func TestExitCodeFor(t *testing.T) {
@@ -247,18 +248,146 @@ func TestOptionsBindParsesFlags(t *testing.T) {
 
 	err := fs.Parse([]string{
 		"--model", "gpt-4o", "--max-steps", "7", "--timeout", "90s",
-		"--history-window", "12", "--session", "s-1", "--json", "hello", "world",
+		"--history-window", "12", "--context-window", "8192",
+		"--session", "s-1", "--json", "hello", "world",
 	})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	if o.model != "gpt-4o" || o.maxSteps != 7 || o.timeout.String() != "1m30s" ||
-		o.historyWindow != 12 || o.session != "s-1" || !o.asJSON {
+		o.historyWindow != 12 || o.contextWindow != 8192 || o.session != "s-1" || !o.asJSON {
 		t.Fatalf("flags not bound as expected: %+v", o)
 	}
 	// Everything after the flags is the message, left for resolveMessage.
 	if got := strings.Join(fs.Args(), " "); got != "hello world" {
 		t.Fatalf("positional args = %q, want %q", got, "hello world")
+	}
+}
+
+// --- context settings -----------------------------------------------
+
+// The flag's whole point: one number reaches every context setting,
+// including the two Profile.Apply cannot write itself.
+func TestContextWindowSizesEverything(t *testing.T) {
+	const window = 8192
+	want := agentloop.ProfileFor(window)
+
+	o := options{contextWindow: window}
+	cfg := agentloop.Config{HistoryWindow: o.historyWindow}
+	o.applyContext(agentloop.ProfileFor(o.contextWindow), &cfg, nil)
+
+	if cfg.ContextBudget.MaxTokens != window {
+		t.Errorf("ContextBudget.MaxTokens = %d, want %d", cfg.ContextBudget.MaxTokens, window)
+	}
+	if cfg.HistoryWindow != want.HistoryWindow {
+		t.Errorf("HistoryWindow = %d, want the profile's %d", cfg.HistoryWindow, want.HistoryWindow)
+	}
+	sc, ok := cfg.Compactor.(*agentloop.SummarizingCompactor)
+	if !ok {
+		t.Fatalf("Compactor = %T, want a *SummarizingCompactor installed for the profile to configure", cfg.Compactor)
+	}
+	if sc.Trigger != want.CompactTrigger || sc.Keep != want.CompactKeep {
+		t.Errorf("compactor bounds = %d/%d, want the profile's %d/%d",
+			sc.Trigger, sc.Keep, want.CompactTrigger, want.CompactKeep)
+	}
+	if sc.Budget.MaxTokens != want.SummarizeBudget.MaxTokens {
+		t.Errorf("compactor budget = %d, want the profile's %d", sc.Budget.MaxTokens, want.SummarizeBudget.MaxTokens)
+	}
+	// The two the profile hands back rather than writing: they are read
+	// at the call site, so this only asserts they are non-zero to hold on
+	// to — newSession is what puts them on the builder and the loader.
+	if want.MaxLogBytes <= 0 || want.ProjectInlineBytes <= 0 {
+		t.Errorf("profile has nothing to pass on: MaxLogBytes=%d ProjectInlineBytes=%d",
+			want.MaxLogBytes, want.ProjectInlineBytes)
+	}
+}
+
+// An explicit --history-window is a number the operator typed; the
+// profile's is one derived on their behalf. The typed one wins, which
+// means the profile has to be applied first and then overridden.
+func TestExplicitHistoryWindowBeatsTheProfile(t *testing.T) {
+	o := options{contextWindow: 8192, historyWindow: 7}
+	cfg := agentloop.Config{HistoryWindow: o.historyWindow}
+	o.applyContext(agentloop.ProfileFor(o.contextWindow), &cfg, nil)
+
+	if cfg.HistoryWindow != 7 {
+		t.Fatalf("HistoryWindow = %d, want the explicit 7 rather than the profile's %d",
+			cfg.HistoryWindow, agentloop.ProfileFor(8192).HistoryWindow)
+	}
+	// The rest of the profile still applies — one override is not a
+	// reason to discard the other three settings.
+	if cfg.ContextBudget.MaxTokens != 8192 {
+		t.Errorf("ContextBudget.MaxTokens = %d, want 8192", cfg.ContextBudget.MaxTokens)
+	}
+	if cfg.Compactor == nil {
+		t.Error("no compactor installed")
+	}
+}
+
+// Without the flag the CLI must behave exactly as it did before it
+// existed: no budget, no compactor, no touched history window.
+func TestNoContextWindowLeavesTheDefaults(t *testing.T) {
+	o := options{historyWindow: 12}
+	cfg := agentloop.Config{HistoryWindow: o.historyWindow}
+	o.applyContext(agentloop.ProfileFor(o.contextWindow), &cfg, nil)
+
+	if cfg.ContextBudget.MaxTokens != 0 {
+		t.Errorf("ContextBudget.MaxTokens = %d, want it left disabled", cfg.ContextBudget.MaxTokens)
+	}
+	if cfg.Compactor != nil {
+		t.Errorf("Compactor = %T, want none installed without a stated window", cfg.Compactor)
+	}
+	if cfg.HistoryWindow != 12 {
+		t.Errorf("HistoryWindow = %d, want the flag's 12", cfg.HistoryWindow)
+	}
+}
+
+// A compactor already on the Config is the caller's choice; the profile
+// configures it if it can, but never replaces it.
+func TestContextWindowKeepsAConfiguredCompactor(t *testing.T) {
+	mine := &agentloop.SummarizingCompactor{Model: "small-summarizer"}
+	o := options{contextWindow: 8192}
+	cfg := agentloop.Config{Compactor: mine}
+	o.applyContext(agentloop.ProfileFor(o.contextWindow), &cfg, nil)
+
+	if cfg.Compactor != agentloop.Compactor(mine) {
+		t.Fatalf("Compactor = %#v, want the one already configured", cfg.Compactor)
+	}
+	if mine.Model != "small-summarizer" {
+		t.Errorf("Model = %q, want the caller's choice untouched", mine.Model)
+	}
+}
+
+func TestNegativeContextWindowIsRejected(t *testing.T) {
+	t.Setenv("AGENTLOOP_DB", filepath.Join(t.TempDir(), "sessions.db"))
+	o := options{contextWindow: -1}
+	if err := o.resolve(); err == nil {
+		t.Fatal("want an error for a negative --context-window")
+	}
+}
+
+// A stated window bounds the project instructions too: they are excerpted
+// rather than inlined whole, and projectGet is offered for the rest.
+// Unbounded, they would sit in a system prompt the budget trimmer is not
+// allowed to touch.
+func TestContextWindowExcerptsProjectInstructions(t *testing.T) {
+	docs := []projectctx.Doc{{
+		Name:    "AGENTS.md",
+		Content: strings.Repeat("x", 40_000),
+		Inline:  strings.Repeat("x", 1792),
+	}}
+
+	sized := renderProjectContext(docs, agentloop.ProfileFor(4096))
+	if len(sized) >= 40_000 {
+		t.Errorf("rendered %d bytes against a 4k window — the whole file went in", len(sized))
+	}
+	if !strings.Contains(sized, "projectGet") {
+		t.Error("excerpted instructions with no pointer at the rest")
+	}
+
+	whole := renderProjectContext(docs, agentloop.Profile{})
+	if !strings.Contains(whole, docs[0].Content) {
+		t.Error("without a stated window the file must still go in whole")
 	}
 }
 

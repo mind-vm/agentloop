@@ -249,6 +249,11 @@ hence `p.MaxLogBytes` and `p.ProjectInlineBytes` passed by hand above.
 A profile is a starting point, not a constraint. Read the fields and
 override what your workload justifies.
 
+The [CLI](/cli/) does the whole of the above from one flag —
+`agentloop --context-window 8192` — including the two `Apply` will not
+write itself. An explicit `--history-window` still wins over the value the
+profile derives.
+
 ## The lever a profile can't pull
 
 **How many packs you register.** `DefaultCapabilities` alone costs ~1,310

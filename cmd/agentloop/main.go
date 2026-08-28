@@ -115,6 +115,10 @@ FLAGS
   --max-steps int         cap LLM round-trips per run (default 20)
   --timeout duration      wall-clock cap per run (default 5m)
   --history-window int    prior steps rehydrated into context (default 80)
+  --context-window int    the model's SERVED window in tokens; sizes the
+                          context budget, history window, compaction, log
+                          output and AGENTS.md excerpts to it. Set it for a
+                          local model; leave it off for a frontier one
   --session string        session id to run under (default: a new one)
   --continue              resume the most recently updated session
   --ephemeral             keep the session in memory; write nothing

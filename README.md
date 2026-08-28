@@ -166,6 +166,17 @@ onto `agentloop.Config`, so `--max-steps`, `--timeout`, and
 `--history-window` mean exactly what `MaxIterations`, `RunTimeout`, and
 `HistoryWindow` mean in Go.
 
+Against a locally hosted model, `--context-window <tokens>` is the one
+flag to set: it is `agentloop.ProfileFor` on the command line, sizing the
+context budget, the history window, compaction, `log()` output and
+`AGENTS.md` excerpts to the window the server actually serves, and
+installing a summarizing compactor on the same client. An explicit
+`--history-window` still wins over the value it derives.
+
+```sh
+agentloop --context-window 8192 --timeout 30m "..."
+```
+
 `agentloop doctor` reports the resolved endpoint and model, makes one
 real request to confirm the endpoint answers (`--offline` skips it), and
 lists the project instructions and skills it found in the workspace.
@@ -400,6 +411,7 @@ catches a build-tag mistake in the platform-specific files.
   workload justifies. `Apply` leaves a custom `Compactor` alone (its
   knobs are its own) and never touches the sandbox builder or the
   project-instruction loader, which are separate objects you construct.
+  The CLI wires all of it from one flag: `agentloop --context-window 8192`.
 
   The remaining lever it can't pull for you is **how many packs you
   register**: `DefaultCapabilities` costs ~1,300 prompt tokens of
