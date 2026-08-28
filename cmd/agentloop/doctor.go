@@ -122,17 +122,31 @@ func cmdDoctor(argv []string) int {
 // probe makes the smallest real request the endpoint will accept, which
 // is the only check that distinguishes a plausible configuration from a
 // working one.
+//
+// It goes through Stream, because that is what the loop uses. Probing
+// Complete instead would pass against a gateway that rejects streaming
+// and then fail on the first real run — the exact case someone pointing
+// this at a third-party endpoint wants to find out about. Stream covers
+// both, since it falls back to Complete when an upstream refuses.
+//
+// It deliberately does not report WHICH of the two served the answer.
+// The fallback delivers the whole response as one synthetic chunk, so
+// an onChunk callback firing proves nothing, and a short reply from a
+// genuinely streaming endpoint arrives as one chunk too. Telling them
+// apart needs the llm client to say so itself; guessing here would put
+// a confident wrong answer in a diagnostic people run precisely because
+// they are unsure.
 func (r *report) probe(client llm.Client, model string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	maxTokens := 1
 	start := time.Now()
-	_, err := client.Complete(ctx, llm.CompletionRequest{
+	_, err := client.Stream(ctx, llm.CompletionRequest{
 		Model:     model,
 		Messages:  []llm.Message{{Role: "user", Content: "ping"}},
 		MaxTokens: &maxTokens,
-	})
+	}, nil)
 	if err != nil {
 		r.fail("reachability", "%s", err)
 		return
