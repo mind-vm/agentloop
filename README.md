@@ -146,7 +146,19 @@ A failed request is retried up to three times by default — set
   implementation: past `Trigger` messages it summarizes everything
   except the most recent `Keep` via an `llm.Client` (point it at a small,
   cheap model), and it never splits a `run()` block from the execution
-  result it produced. Raising `HistoryWindow` alongside it is how a
+  result it produced. A session long enough to need compaction can be
+  long enough to overflow the context of the call meant to fix that, so
+  the transcript is summarized in **chunks** that each fit one call and
+  the partial summaries are folded together until one remains —
+  `SummarizingCompactor.Budget` (a `ContextBudget`, sized to the
+  *summarizer's* window, not the loop's) is what sizes a chunk, and
+  `MergePrompt` overrides the fold instruction. Nothing is discarded to
+  make the transcript fit: a stretch a single-call summarizer would have
+  elided is summarized like any other, and the only surviving elision is
+  for one individual message too large for a whole call on its own. A
+  242 KB transcript takes one call against a 128k window and 21 against
+  a 4k one, where before it was a single oversized call the small model
+  would reject. Raising `HistoryWindow` alongside it is how a
   session gets long-term memory — the prompt stays bounded by the
   compactor rather than by the window. Each compaction is persisted as
   a `summary` checkpoint step, so the next `Run` rehydrates from it

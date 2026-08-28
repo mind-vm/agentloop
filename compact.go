@@ -108,12 +108,24 @@ const (
 	// verbatim; everything older folds into the summary.
 	defaultCompactKeep = 20
 
-	// maxSummarizeBytes caps the transcript handed to the summarizing
-	// model. A session long enough to need compaction can also be long
-	// enough to overflow the context of the call meant to fix that, so
-	// an oversized transcript keeps its head (the original ask) and its
-	// tail (the most recent work) and elides the middle.
-	maxSummarizeBytes = 200_000
+	// defaultSummarizeTokens bounds ONE summarization call's transcript
+	// when SummarizingCompactor.Budget is unset. Roughly what the byte
+	// cap this replaced worked out to, so an existing configuration
+	// keeps chunking at about the size it used to elide at.
+	defaultSummarizeTokens = 50_000
+
+	// minChunkTokens floors the per-call allowance. A budget whose
+	// window is smaller than its own instruction prompt would otherwise
+	// compute a non-positive allowance and chunk forever; making no
+	// progress is worse than one oversized call the provider may still
+	// accept.
+	minChunkTokens = 1_000
+
+	// maxFoldRounds bounds how many times partial summaries are merged
+	// into fewer, shorter ones. Each round strictly shrinks its input,
+	// so hitting this means the model is returning summaries as long as
+	// what it was given — a runaway to stop, not to keep paying for.
+	maxFoldRounds = 5
 )
 
 // DefaultCompactPrompt is the instruction SummarizingCompactor sends
@@ -131,8 +143,43 @@ Write a compact summary covering, in this order:
 
 Be specific — names, ids, numbers, paths — and omit anything the agent can trivially recompute. No preamble, no closing remark, no markdown headings. Prose and short bullets only.`
 
+// DefaultMergePrompt is the instruction sent when several partial
+// summaries have to be folded into one, i.e. when the transcript did
+// not fit a single summarization call. Overridable via
+// SummarizingCompactor.MergePrompt.
+//
+// It is a separate instruction from DefaultCompactPrompt because the
+// input is a different kind of thing: already-summarized prose rather
+// than a transcript of turns, where the risk is concatenating
+// superseded facts rather than losing specifics.
+const DefaultMergePrompt = `You are merging several partial summaries of ONE agent session into a single summary.
+
+The inputs are consecutive stretches of the same session, in order. Later parts continue the work of earlier ones: a fact established early is still true later unless a later part says otherwise, and a value a later part corrects supersedes the earlier one.
+
+Write one summary in the same shape as its inputs, covering, in this order:
+- what the user asked for, in their own terms, including any constraint they stated
+- what has actually been established: findings, values, identifiers, and decisions the later turns will need
+- what failed and why, so the agent does not retry a dead end
+- what remains unfinished
+
+Reconcile rather than concatenate. Drop what a later part superseded, keep every specific still in play — names, ids, numbers, paths — and never introduce a detail no input states. No preamble, no closing remark, no markdown headings. Prose and short bullets only.`
+
 // SummarizingCompactor folds the older part of a long history into one
 // summary message, keeping the most recent turns verbatim.
+//
+// A session long enough to need compaction can be long enough to
+// overflow the context of the call meant to fix that, so the
+// transcript is summarized in CHUNKS that each fit one call and the
+// partial summaries are then folded together — repeatedly, until one
+// remains. Nothing is dropped to make the transcript fit: a stretch of
+// the session that a single-call summarizer would have elided is
+// summarized like any other. The only surviving elision is for one
+// individual message too large for a whole call on its own.
+//
+// Budget is what sizes a chunk. Left unset it defaults to roughly the
+// old single-call bound, which is the right answer against a hosted
+// model; point it at a small local model's window and the same
+// transcript is simply summarized in more, smaller pieces.
 //
 // Cost: a summarization happens when the rehydrated history passes
 // Trigger. Because the loop persists each result as a checkpoint (see
@@ -140,7 +187,9 @@ Be specific — names, ids, numbers, paths — and omit anything the agent can t
 // conversation rather than once per Run — a session compacted at turn
 // 60 does not pay again until it has grown back past Trigger. Trigger
 // is the knob: raise it to pay less often and send more verbatim
-// history, lower it for the reverse.
+// history, lower it for the reverse. Chunking multiplies the calls one
+// compaction makes, so a small Budget against a large Trigger is the
+// combination that costs most.
 type SummarizingCompactor struct {
 	// LLM performs the summarization. Required; a nil client makes
 	// Compact a no-op that returns the history unchanged, so a missing
@@ -164,6 +213,22 @@ type SummarizingCompactor struct {
 
 	// Prompt overrides DefaultCompactPrompt.
 	Prompt string
+
+	// MergePrompt overrides DefaultMergePrompt, the instruction used
+	// when partial summaries have to be folded together. Unused when
+	// the transcript fits a single call.
+	MergePrompt string
+
+	// Budget bounds ONE summarization call against the window of the
+	// model doing the summarizing — which is not the loop's model, and
+	// is often deliberately smaller and cheaper. Its MaxTokens is that
+	// window and its Reserve the room left for the summary itself.
+	//
+	// Zero uses an internal default sized to the bound this replaced,
+	// which suits a hosted summarizer. Set it when the summarizer is
+	// locally hosted: it is the difference between chunking to fit and
+	// sending one call the server will reject.
+	Budget ContextBudget
 }
 
 // Compact implements Compactor.
@@ -180,25 +245,12 @@ func (c *SummarizingCompactor) Compact(ctx context.Context, history []llm.Messag
 	}
 	older, tail := history[:split], history[split:]
 
-	prompt := c.Prompt
-	if prompt == "" {
-		prompt = DefaultCompactPrompt
-	}
-	resp, err := c.LLM.Complete(ctx, llm.CompletionRequest{
-		Model: c.Model,
-		Messages: []llm.Message{
-			{Role: "system", Content: prompt},
-			{Role: "user", Content: renderTranscript(older)},
-		},
-	})
-	// Usage is reported on both paths — the call was billable either way.
-	tokens := TokenUsage{Prompt: int32(resp.InputTokens), Completion: int32(resp.OutputTokens)}
+	// Usage accumulates across every call a chunked compaction makes and
+	// is reported on both paths — those calls were billable either way.
+	var tokens TokenUsage
+	summary, err := c.summarize(ctx, older, &tokens)
 	if err != nil {
-		return CompactResult{Messages: history, Tokens: tokens}, fmt.Errorf("agentloop: compact: %w", err)
-	}
-	summary := strings.TrimSpace(resp.Content)
-	if summary == "" {
-		return CompactResult{Messages: history, Tokens: tokens}, fmt.Errorf("agentloop: compact: empty summary")
+		return CompactResult{Messages: history, Tokens: tokens}, err
 	}
 
 	// The persisted Summary is the message content verbatim, so a
@@ -259,25 +311,263 @@ func isExecutionResult(m llm.Message) bool {
 	return m.Role == "user" && strings.HasPrefix(m.Content, executionResultPrefix)
 }
 
+// summarize folds a transcript into one summary, in as many calls as
+// it takes.
+//
+// The transcript is split into chunks that each fit one call, every
+// chunk is summarized, and the partial summaries are folded together
+// until one remains. A transcript that fits in a single chunk takes the
+// single-call path unchanged — no part headers, no merge pass — so the
+// common case is exactly what it was before chunking existed.
+//
+// A failed chunk fails the whole compaction. Continuing without it
+// would erase that stretch of the session while presenting the result
+// as a complete summary, and the loop's fallback (proceed on the
+// uncompacted history) is strictly better than a summary with a
+// silent hole in it.
+func (c *SummarizingCompactor) summarize(ctx context.Context, messages []llm.Message, tokens *TokenUsage) (string, error) {
+	allowance, est := c.chunkBounds()
+	chunks := transcriptChunks(messages, allowance, est)
+
+	if len(chunks) == 1 {
+		return c.call(ctx, c.compactPrompt(), chunks[0], tokens)
+	}
+
+	parts := make([]string, 0, len(chunks))
+	for i, chunk := range chunks {
+		// Say which stretch this is, so the model does not read the end
+		// of a middle chunk as the end of the session and report work
+		// as abandoned when the next chunk finishes it.
+		body := fmt.Sprintf("Part %d of %d of the earlier transcript.\n\n%s", i+1, len(chunks), chunk)
+		part, err := c.call(ctx, c.compactPrompt(), body, tokens)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, part)
+	}
+	return c.fold(ctx, parts, allowance, est, tokens)
+}
+
+// fold merges partial summaries until one remains, in rounds, so a
+// session whose summaries alone overflow a call still converges.
+func (c *SummarizingCompactor) fold(ctx context.Context, parts []string, allowance int, est TokenEstimator, tokens *TokenUsage) (string, error) {
+	for round := 1; len(parts) > 1; round++ {
+		if round > maxFoldRounds {
+			return "", fmt.Errorf("agentloop: compact: %d partial summaries still do not fit one call after %d fold rounds", len(parts), maxFoldRounds)
+		}
+		groups := groupParts(parts, allowance, est)
+		next := make([]string, 0, len(groups))
+		for _, group := range groups {
+			merged, err := c.call(ctx, c.mergePrompt(), joinParts(group), tokens)
+			if err != nil {
+				return "", err
+			}
+			next = append(next, merged)
+		}
+		parts = next
+	}
+	return parts[0], nil
+}
+
+// call performs one summarization round-trip, charging its usage to
+// tokens whether or not it succeeded.
+func (c *SummarizingCompactor) call(ctx context.Context, prompt, body string, tokens *TokenUsage) (string, error) {
+	resp, err := c.LLM.Complete(ctx, llm.CompletionRequest{
+		Model: c.Model,
+		Messages: []llm.Message{
+			{Role: "system", Content: prompt},
+			{Role: "user", Content: body},
+		},
+	})
+	tokens.Prompt += int32(resp.InputTokens)
+	tokens.Completion += int32(resp.OutputTokens)
+	if err != nil {
+		return "", fmt.Errorf("agentloop: compact: %w", err)
+	}
+	summary := strings.TrimSpace(resp.Content)
+	if summary == "" {
+		return "", fmt.Errorf("agentloop: compact: empty summary")
+	}
+	return summary, nil
+}
+
+func (c *SummarizingCompactor) compactPrompt() string {
+	if c.Prompt != "" {
+		return c.Prompt
+	}
+	return DefaultCompactPrompt
+}
+
+func (c *SummarizingCompactor) mergePrompt() string {
+	if c.MergePrompt != "" {
+		return c.MergePrompt
+	}
+	return DefaultMergePrompt
+}
+
+// chunkBounds resolves how much TRANSCRIPT one call may carry: the
+// budget's allowance less the instruction that shares the request with
+// it. The larger of the two prompts is subtracted, since a chunk sized
+// for the compact instruction would not fit alongside the merge one.
+func (c *SummarizingCompactor) chunkBounds() (int, TokenEstimator) {
+	est := c.Budget.estimator()
+
+	allowance := defaultSummarizeTokens
+	if c.Budget.enabled() {
+		allowance = c.Budget.allowance()
+	}
+
+	overhead := est(c.compactPrompt())
+	if merge := est(c.mergePrompt()); merge > overhead {
+		overhead = merge
+	}
+	allowance -= overhead + 2*messageFrameTokens
+
+	if allowance < minChunkTokens {
+		allowance = minChunkTokens
+	}
+	return allowance, est
+}
+
+// transcriptChunks renders messages into labelled plain text, split
+// into pieces that each fit allowance tokens.
+//
+// Splits fall on message boundaries: a chunk is whole turns, so the
+// summarizing model never reads half a run() block. The one exception
+// is a single message too large for a chunk of its own — that one gets
+// its middle elided, which is the last remaining place this package
+// discards transcript rather than summarizing it.
+//
+// Always returns at least one chunk, so the caller's single-chunk fast
+// path is reachable for an empty transcript too.
+func transcriptChunks(messages []llm.Message, allowance int, est TokenEstimator) []string {
+	var chunks []string
+	var cur strings.Builder
+	curTokens := 0
+
+	flush := func() {
+		if cur.Len() > 0 {
+			chunks = append(chunks, cur.String())
+			cur.Reset()
+			curTokens = 0
+		}
+	}
+
+	for _, m := range messages {
+		part := renderMessage(m)
+		n := est(part)
+		if n > allowance {
+			flush()
+			chunks = append(chunks, elideMiddle(part, allowance, est))
+			continue
+		}
+		if curTokens+n > allowance {
+			flush()
+		}
+		cur.WriteString(part)
+		curTokens += n
+	}
+	flush()
+
+	if len(chunks) == 0 {
+		return []string{""}
+	}
+	return chunks
+}
+
+// renderMessage is one turn as the summarizing model reads it.
+func renderMessage(m llm.Message) string {
+	label := m.Role
+	if isExecutionResult(m) {
+		label = "execution result"
+	}
+	return fmt.Sprintf("[%s]\n%s\n\n", label, m.Content)
+}
+
 // renderTranscript flattens messages into the labelled plain text the
-// summarizing model reads, bounded by maxSummarizeBytes: over the cap,
-// the head and tail are kept and the middle is replaced by a marker
-// saying how much was dropped.
+// summarizing model reads, unbounded. Bounding is transcriptChunks'
+// job — this is what a chunk is made of.
 func renderTranscript(messages []llm.Message) string {
 	var b strings.Builder
 	for _, m := range messages {
-		label := m.Role
-		if isExecutionResult(m) {
-			label = "execution result"
+		b.WriteString(renderMessage(m))
+	}
+	return b.String()
+}
+
+// groupParts batches partial summaries into merge calls, each group
+// small enough to fit one.
+//
+// A single part too large for a group of its own still gets one, alone:
+// re-summarizing it shrinks it, which is what lets the next fold round
+// make progress where this one could not.
+func groupParts(parts []string, allowance int, est TokenEstimator) [][]string {
+	var groups [][]string
+	var cur []string
+	curTokens := 0
+	for _, p := range parts {
+		n := est(p) + messageFrameTokens
+		if len(cur) > 0 && curTokens+n > allowance {
+			groups = append(groups, cur)
+			cur, curTokens = nil, 0
 		}
-		fmt.Fprintf(&b, "[%s]\n%s\n\n", label, m.Content)
+		cur = append(cur, p)
+		curTokens += n
 	}
-	full := b.String()
-	if len(full) <= maxSummarizeBytes {
-		return full
+	if len(cur) > 0 {
+		groups = append(groups, cur)
 	}
-	half := maxSummarizeBytes / 2
-	return full[:half] +
-		fmt.Sprintf("\n\n[... %d bytes of the middle of this transcript omitted ...]\n\n", len(full)-maxSummarizeBytes) +
-		full[len(full)-half:]
+	return groups
+}
+
+// joinParts labels each partial summary with its position, so the merge
+// instruction's "later parts supersede earlier ones" has something to
+// bind to.
+func joinParts(parts []string) string {
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	var b strings.Builder
+	for i, p := range parts {
+		fmt.Fprintf(&b, "[part %d of %d]\n%s\n\n", i+1, len(parts), p)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// elideMiddle shrinks s to at most max tokens by keeping its head and
+// its tail and replacing the middle with a marker saying how much went.
+// Head and tail because, for the one message big enough to need this,
+// how it starts and how it ends are what a summary can still use.
+//
+// The size is found by binary search over the bytes kept rather than
+// computed, so it holds for a supplied TokenEstimator as well as for
+// the default's fixed bytes-per-token.
+func elideMiddle(s string, max int, est TokenEstimator) string {
+	if est(s) <= max {
+		return s
+	}
+	lo, hi := 0, len(s)
+	best := elideTo(s, 0)
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		candidate := elideTo(s, mid)
+		if est(candidate) <= max {
+			best = candidate
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return best
+}
+
+// elideTo keeps the first and last halves of keep bytes of s.
+func elideTo(s string, keep int) string {
+	if keep >= len(s) {
+		return s
+	}
+	half := keep / 2
+	return s[:half] +
+		fmt.Sprintf("\n\n[... %d bytes of the middle of this transcript omitted ...]\n\n", len(s)-keep) +
+		s[len(s)-(keep-half):]
 }
