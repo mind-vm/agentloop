@@ -5,7 +5,7 @@
 // `go build ./...` and `go test ./...` from the repo root see both
 // modules and resolve browser/chrome's agentloop dependency against the
 // working tree rather than a published tag.
-go 1.26
+go 1.25.0
 
 use (
 	.
