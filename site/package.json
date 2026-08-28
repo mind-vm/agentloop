@@ -12,5 +12,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check"
+  },
+  "devDependencies": {
+    "@astrojs/markdown-remark": "^7.2.4"
   }
 }

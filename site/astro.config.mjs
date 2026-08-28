@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from "astro/config";
+import { unified } from "@astrojs/markdown-remark";
 import starlight from "@astrojs/starlight";
 
 import { rehypeBaseLinks } from "./rehype-base-links.mjs";
@@ -83,7 +84,13 @@ export default defineConfig({
   // not `/agentloop/concepts/` — and this adds it at build time from the one
   // place `base` is defined. See rehype-base-links.mjs for what it does and
   // does not cover.
+  //
+  // Passed through `unified()` rather than the bare `markdown.rehypePlugins`
+  // key, which Astro 7.2 deprecated. Naming the processor explicitly does not
+  // shut integrations out of the pipeline: Astro merges plugins registered by
+  // integrations into whatever processor is configured, as long as it is a
+  // unified one, so Starlight's own Markdown handling is unaffected.
   markdown: {
-    rehypePlugins: [rehypeBaseLinks],
+    processor: unified({ rehypePlugins: [rehypeBaseLinks] }),
   },
 });
