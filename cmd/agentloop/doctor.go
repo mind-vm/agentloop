@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mind-vm/agentloop/llm"
@@ -65,6 +66,17 @@ func cmdDoctor(argv []string) int {
 		d.info("network", "off (--no-network): fetch() and require('http') are not installed")
 	} else {
 		d.info("network", "on — fetch() asks before reaching an unapproved domain")
+	}
+	switch {
+	case o.noExec:
+		d.info("commands", "off (--no-exec): exec() is not installed")
+	case len(o.execNames) > 0:
+		d.warn("commands", "%s run without asking; anything else is asked about", strings.Join(o.execNames, ", "))
+	default:
+		d.info("commands", "exec() asks before running anything")
+	}
+	if o.allowShell {
+		d.warn("shell", "exec() accepts a shell string (--dangerously-allow-shell)")
 	}
 
 	docs, err := projectctx.Load(o.cwd)

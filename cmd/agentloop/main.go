@@ -127,6 +127,10 @@ FLAGS
   --approve mode          answer permission prompts: prompt, auto, or deny
                           (default: prompt at a terminal, deny otherwise)
   --no-network            remove fetch() and require('http')
+  --no-exec               remove exec()
+  --allow-exec names      run these commands without asking, e.g. go,git
+  --dangerously-allow-shell
+                          let exec() take a shell string as well as an argv
 
 ENVIRONMENT
   OPENAI_API_KEY          required

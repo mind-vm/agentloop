@@ -49,7 +49,9 @@ is kept verbatim) and large data never appears in the context window twice.
   `SecretPack` (`secret`), `SearchPack` (`documentSearch`), `StoresPack`
   (`stores.list`/`stores.read`), `WorkspacePack` (`readFile`,
   `writeFile`, `editFile`, `listDir`, `glob`, `grep` — confined to one
-  directory by `os.Root`, so `..` and symlinks cannot escape it), and
+  directory by `os.Root`, so `..` and symlinks cannot escape it),
+  `ExecPack` (`exec` — argv only, allowlisted environment, capped
+  output, and a timeout that reclaims the whole process group), and
   `OpenAPIPack`, which generates a
   `require()`-able skill — one JS function per operation — from an
   OpenAPI 3 document. Each takes a callback, small interface, or (for
@@ -206,6 +208,41 @@ reading — the mutations are where the consequence is.
 the edit otherwise rather than guessing. `--no-network` removes `fetch`
 and `require('http')` entirely, for a tree whose contents should not be
 able to leave the machine.
+
+### Running commands
+
+`exec(argv)` runs a command and returns `{stdout, stderr, code, timedOut}`.
+A non-zero exit is a *result*, not an error — a failing build is the
+information the agent asked for:
+
+```js
+const r = exec(["go", "test", "./..."]);
+if (r.code !== 0) log(r.stderr);
+```
+
+Every call is asked about, showing the full command, because the
+arguments are most of what there is to judge. `--allow-exec go,git`
+pre-approves by command name, which is the difference between "this
+agent may run the build" and "this agent may run anything".
+`--no-exec` removes the primitive entirely.
+
+There is no shell: argv is an array, so a model-authored string never
+becomes a command line. `--dangerously-allow-shell` opts back in. Note
+that this is a convenience, not a boundary — an agent can still ask to
+run `["sh", "-c", "…"]`, and the approval prompt showing the whole
+command is what actually stands between that and running.
+
+The child gets an allowlisted environment — `PATH`, `HOME`, locale and
+little else — so the agent's own API key is absent by construction
+rather than by remembering to strip it. Output is capped per stream and
+truncated with a marker. A command that outlives its timeout is killed
+along with everything it spawned, so a build tool cannot leave its
+compiler running.
+
+Unlike the workspace primitives, `exec` is **not confined to `--cwd`**.
+Once another program is running it has the full privileges of the user
+running the agent, and `os.Root` has no say in it. What bounds this is
+the permission prompt and your judgement about which commands to allow.
 
 ### Permission prompts
 

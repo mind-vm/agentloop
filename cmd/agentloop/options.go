@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
@@ -21,6 +22,7 @@ import (
 	"github.com/mind-vm/agentloop/agentloopsql"
 	"github.com/mind-vm/agentloop/llm"
 	"github.com/mind-vm/agentloop/projectctx"
+	"github.com/mind-vm/agentloop/sandbox"
 	"github.com/mind-vm/agentloop/skills"
 )
 
@@ -51,6 +53,13 @@ type options struct {
 	// noNetwork removes fetch and http, for working on a tree whose
 	// contents should not be able to leave the machine.
 	noNetwork bool
+
+	// noExec removes exec() entirely; allowExec pre-approves command
+	// basenames; allowShell permits the string form of exec().
+	noExec     bool
+	allowExec  string
+	allowShell bool
+	execNames  []string
 }
 
 // bind registers the shared flags on fs. Every subcommand binds the
@@ -70,6 +79,9 @@ func (o *options) bind(fs *flag.FlagSet) {
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress the live activity stream on stderr")
 	fs.StringVar(&o.approve, "approve", "", "how to answer permission prompts: prompt, auto, or deny (default: prompt at a terminal, deny otherwise)")
 	fs.BoolVar(&o.noNetwork, "no-network", false, "remove fetch() and require('http') — the agent can read the workspace but cannot send it anywhere")
+	fs.BoolVar(&o.noExec, "no-exec", false, "remove exec() — the agent cannot run commands at all")
+	fs.StringVar(&o.allowExec, "allow-exec", "", "comma-separated command names to run without asking, e.g. go,git")
+	fs.BoolVar(&o.allowShell, "dangerously-allow-shell", false, "let exec() take a shell string as well as an argv array")
 }
 
 // resolve fills in the defaults that need the process to compute them,
@@ -110,7 +122,33 @@ func (o *options) resolve() error {
 		return err
 	}
 	o.approval = approval
+
+	o.execNames = splitList(o.allowExec)
+	if o.noExec && (len(o.execNames) > 0 || o.allowShell) {
+		return errors.New("--no-exec removes exec() entirely, so there is nothing for --allow-exec or --dangerously-allow-shell to permit")
+	}
 	return nil
+}
+
+// splitList parses a comma-separated flag value, ignoring empty entries
+// so "go,,git" and a trailing comma both mean what they look like.
+func splitList(v string) []string {
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// policy is the PolicyChecker for this invocation.
+//
+// The loop installs a zero-value DefaultPolicy when none is configured,
+// which is the right shape but cannot carry the command grants
+// --allow-exec expresses, so one is built explicitly here.
+func (o *options) policy() sandbox.PolicyChecker {
+	return sandbox.DefaultPolicy{AllowCommands: o.execNames}
 }
 
 // resolveApprovalMode settles how permission prompts get answered.
@@ -257,7 +295,7 @@ func newSession(o *options, warn func(string), in *bufio.Reader) (*session, erro
 	// /new changes it mid-process, and an approval must not carry across
 	// that boundary into a session the user meant to start clean.
 	prompter := newTerminalPrompter(in, os.Stderr, o.approval, store, func() string { return sess.id })
-	caps := buildCapabilities(client, o.model, prompter, root, o.noNetwork, warn)
+	caps := buildCapabilities(o, client, prompter, root, warn)
 	caps = append(caps, skills.Capabilities(sk)...)
 
 	sess.loop = agentloop.New(agentloop.Config{
@@ -265,6 +303,7 @@ func newSession(o *options, warn func(string), in *bufio.Reader) (*session, erro
 		Sessions:       sessions,
 		Steps:          steps,
 		SandboxBuilder: &agentloop.DefaultSandboxBuilder{Capabilities: caps},
+		Policy:         o.policy(),
 		Model:          o.model,
 		MaxIterations:  o.maxSteps,
 		RunTimeout:     o.timeout,

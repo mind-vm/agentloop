@@ -70,8 +70,12 @@ func (h *humanRenderer) event(evt agentloop.RunEvent) {
 		// A file the agent changed is the line a person scanning the run
 		// most needs to catch, so it is marked rather than blending into
 		// everything else the sandbox reports.
-		if kind == "file_write" {
+		switch kind {
+		case "file_write":
 			h.line("✎ %s", evt.Content)
+			return
+		case "exec", "exec_result":
+			h.line("$ %s", strings.TrimPrefix(evt.Content, "exec: "))
 			return
 		}
 		h.line("%s: %s", kind, evt.Content)

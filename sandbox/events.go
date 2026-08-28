@@ -55,6 +55,12 @@ const (
 	// editFile(). Distinct from EventFileRead because it is the one a
 	// reviewer of a run's trace actually needs to find.
 	EventFileWrite EventKind = "file_write"
+	// EventExec fires when exec() starts a command, before it runs.
+	// Emitted separately from its result so a trace shows what was
+	// started even if the run never gets to finish it.
+	EventExec EventKind = "exec"
+	// EventExecResult carries a finished command's exit status.
+	EventExecResult EventKind = "exec_result"
 	// EventBlock carries a structured render block (chart/table/process-map/
 	// sql/…) emitted by a pack for a rich UI to render. Summary names the block
 	// type; the structured spec rides in Event.Payload.

@@ -25,10 +25,10 @@ var networkCapabilities = []string{"fetch", "http"}
 // human, so that capability's Build is swapped for one holding the
 // requester. And the workspace pack is appended, rooted at the
 // directory the invocation names.
-func buildCapabilities(client llm.Client, model string, requester sandbox.InputRequester, root *os.Root, noNetwork bool, warn func(string)) []agentloop.Capability {
-	caps := agentloop.DefaultCapabilities(client, model)
+func buildCapabilities(o *options, client llm.Client, requester sandbox.InputRequester, root *os.Root, warn func(string)) []agentloop.Capability {
+	caps := agentloop.DefaultCapabilities(client, o.model)
 
-	if noNetwork {
+	if o.noNetwork {
 		caps = slices.DeleteFunc(caps, func(c agentloop.Capability) bool {
 			return slices.Contains(networkCapabilities, c.Name)
 		})
@@ -55,6 +55,21 @@ func buildCapabilities(client llm.Client, model string, requester sandbox.InputR
 			Build: func(bc agentloop.BuildContext) ([]sandbox.Pack, error) {
 				return []sandbox.Pack{
 					ext.WorkspacePack(bc.Ctx, root, ext.WorkspaceOptions{Approver: requester}),
+				}, nil
+			},
+		})
+	}
+
+	if !o.noExec {
+		caps = append(caps, agentloop.Capability{
+			Name:        "exec",
+			Description: "run commands and read their output",
+			Build: func(bc agentloop.BuildContext) ([]sandbox.Pack, error) {
+				return []sandbox.Pack{
+					ext.ExecPack(bc.Ctx, root, ext.ExecOptions{
+						Approver:   requester,
+						AllowShell: o.allowShell,
+					}),
 				}, nil
 			},
 		})
