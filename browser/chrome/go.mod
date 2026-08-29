@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/chromedp/cdproto v0.0.0-20260804232424-e85f50dbfd32
 	github.com/chromedp/chromedp v0.16.0
-	github.com/mind-vm/agentloop v0.3.0
+	github.com/mind-vm/agentloop v0.4.0
 )
 
 require (
