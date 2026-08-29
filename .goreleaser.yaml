@@ -62,3 +62,18 @@ changelog:
       - "^test:"
       - "^chore:"
       - Merge pull request
+
+release:
+  # The changelog above is a list of commit subjects. It says what moved; it
+  # does not say why the version number moved, what an upgrade costs, or what
+  # a reader should do about it. That belongs in the annotated tag message,
+  # which is where this repository has been writing it since v0.2.0 — and
+  # where, until now, only someone running `git show <tag>` would find it.
+  #
+  # .TagBody is the tag message with its first line dropped. That line is the
+  # version, which GitHub already prints as the release title, so repeating it
+  # here would only look like a mistake. A lightweight tag has no message and
+  # renders as nothing, which is the right failure: an empty header, not a
+  # broken release.
+  header: |
+    {{ .TagBody }}
