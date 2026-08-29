@@ -42,3 +42,13 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Left to itself GoReleaser infers the version from the nearest
+          # reachable tag, and this repository has tags that are not releases
+          # of this command: browser/chrome carries its own, because a Go
+          # submodule has to. On a tag push the inference is right, but a
+          # workflow_dispatch from a branch would reach browser/chrome/v0.4.0
+          # and build `agentloop_browser/chrome/v0.4.0_linux_amd64.tar.gz`.
+          # Naming the ref removes the guess. Dispatching from a branch now
+          # fails on a non-semver version instead, which is the better of the
+          # two outcomes.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
