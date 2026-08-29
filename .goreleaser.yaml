@@ -63,6 +63,15 @@ changelog:
       - "^chore:"
       - Merge pull request
 
+git:
+  # browser/chrome is a Go submodule, so it carries its own tags in this
+  # repository, and they sort in among the releases of this command.
+  # GoReleaser picked browser/chrome/v0.4.0 as the tag preceding v0.4.1 and
+  # generated the changelog from there — dropping the one commit between that
+  # tag and v0.4.0 from the release notes silently.
+  ignore_tags:
+    - "browser/chrome/*"
+
 release:
   # The changelog above is a list of commit subjects. It says what moved; it
   # does not say why the version number moved, what an upgrade costs, or what
