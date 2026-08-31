@@ -45,10 +45,15 @@ jobs:
           # Left to itself GoReleaser infers the version from the nearest
           # reachable tag, and this repository has tags that are not releases
           # of this command: browser/chrome carries its own, because a Go
-          # submodule has to. On a tag push the inference is right, but a
-          # workflow_dispatch from a branch would reach browser/chrome/v0.4.0
-          # and build `agentloop_browser/chrome/v0.4.0_linux_amd64.tar.gz`.
-          # Naming the ref removes the guess. Dispatching from a branch now
-          # fails on a non-semver version instead, which is the better of the
-          # two outcomes.
+          # submodule has to. A dry run from main duly set about building
+          # `agentloop_browser/chrome/v0.4.0_linux_amd64.tar.gz`.
+          #
+          # The inference does not prefer a version tag over any other kind.
+          # It sorts by refname: a tag `zzz` on the release commit beats
+          # `v8.8.8` there. That `v0.5.0` would beat `browser/chrome/v0.5.0`
+          # on one commit is alphabetical luck, not a rule to rely on.
+          #
+          # Naming the ref removes the guess. A workflow_dispatch from a
+          # branch now fails in validate — `git tag main was not made against
+          # commit <sha>` — rather than publishing something misnamed.
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}

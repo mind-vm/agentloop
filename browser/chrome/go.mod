@@ -32,6 +32,6 @@ require (
 // that declares a newer Go than the root module is a hard failure
 // rather than a toolchain download. A replace keeps that entirely
 // inside this directory. Consumers ignore it and resolve the require
-// above, which has to name a release that actually contains the
-// browser package before this module can be published.
+// above, which has to name a published release that actually contains
+// the browser package. v0.4.0 is the first that does.
 replace github.com/mind-vm/agentloop => ../..
