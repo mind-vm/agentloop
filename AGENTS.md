@@ -80,3 +80,8 @@ with no API key. Use `expect` when a terminal is needed.
 `gofmt -l .`, `go vet ./...`, and `go test -race ./...` all clean — that is
 what CI runs. Cross-compile if you touched anything platform-specific; the
 build tags in `ext/pack_exec_*.go` are invisible to a host-only build.
+
+Cutting a release is not one of these steps, and it has rules the tooling
+will not remind you of — chiefly that the annotated tag message *is* the
+release page, and that a published version cannot be taken back. They are in
+[Releasing](README.md#releasing); read it before you tag, not after.

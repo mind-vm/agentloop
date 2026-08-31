@@ -311,6 +311,46 @@ CI runs `gofmt`, `go vet`, and `go test -race` on Linux and macOS, and
 cross-compiles for every target the CLI is released for — which is what
 catches a build-tag mistake in the platform-specific files.
 
+## Releasing
+
+A release is an annotated tag. Push `vX.Y.Z` and
+[`release.yml`](.github/workflows/release.yml) runs the suite once more, then
+has GoReleaser build and publish the CLI binaries.
+
+**The tag message is the release page.** Its first line is the version, which
+GitHub prints as the title and GoReleaser drops from the body; everything
+after it becomes the text above the generated commit list. That list says
+what moved. Only the tag message can say why the number moved, what an
+upgrade costs, or what cannot be undone — so write it as the explanation, not
+as a label. `git tag -a vX.Y.Z` with no `-m` opens an editor for it.
+
+Four things will catch you, roughly in the order they do:
+
+- **A lightweight tag publishes an empty explanation.** `git tag vX.Y.Z`
+  without `-a` is valid, triggers the whole workflow, and ships a release
+  page with nothing above the changelog.
+- **`{{` in the message fails the publish.** The header is a Go template, so
+  braces are the one sequence a tag message cannot contain — and it fails at
+  publish time, which no dry run reaches.
+- **A version cannot be recalled.** `proxy.golang.org` caches a module
+  version permanently, and pkg.go.dev reads the licence out of that cached
+  zip; [ADR-0016](docs/adr/0016-mit-and-public.md) is what that costs when it
+  goes wrong. A mistake is fixed by cutting the next patch, never by moving
+  the tag.
+- **`browser/chrome` is a separate module.** It carries its own
+  `browser/chrome/vX.Y.Z` tags and its own `require` on this module, and the
+  workflow does not build it — `tags: ["v*"]` cannot match a tag with slashes
+  in it. Tag it after the release its `require` names.
+
+`goreleaser release --snapshot --clean` builds every target and archive
+locally, with no tag, token, or network publish, and is the cheapest check
+that a config change did not break the build. It cannot render the header:
+GoReleaser composes the release body only when publishing.
+
+To finish a publish that half-failed, dispatch the workflow and give it the
+tag. GoReleaser runs in `keep-existing` mode, so it adds the missing
+artifacts and leaves the notes alone.
+
 ## Extending
 
 - **Custom capabilities** — a `Capability` is a name plus a `Build` func
