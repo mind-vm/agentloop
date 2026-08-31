@@ -9,7 +9,16 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # A manual run has to say which tag it is publishing. GitHub will let you
+  # dispatch from a branch, and a branch is not a release: without this the
+  # run would reach for the nearest tag it could see and build that instead.
+  # Asking outright is one field, and it is the field the whole job is about.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, e.g. v0.4.1. Must already exist."
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -23,6 +32,10 @@ jobs:
           # GoReleaser derives the changelog from history, which a shallow
           # clone does not have.
           fetch-depth: 0
+          # On a tag push these are the same thing. On a manual run they are
+          # not: github.ref is whatever was dispatched from, so build the tag
+          # that was named instead.
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-go@v6
         with:
@@ -53,7 +66,9 @@ jobs:
           # `v8.8.8` there. That `v0.5.0` would beat `browser/chrome/v0.5.0`
           # on one commit is alphabetical luck, not a rule to rely on.
           #
-          # Naming the ref removes the guess. A workflow_dispatch from a
-          # branch now fails in validate — `git tag main was not made against
-          # commit <sha>` — rather than publishing something misnamed.
-          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+          # Naming the ref removes the guess. On a manual run that is the
+          # tag input; on a tag push, the ref that triggered it. Name a
+          # branch either way and validate stops the run — `git tag main was
+          # not made against commit <sha>` — rather than publishing it
+          # misnamed.
+          GORELEASER_CURRENT_TAG: ${{ inputs.tag || github.ref_name }}
