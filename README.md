@@ -1,3 +1,11 @@
+> **Archived.** Development continues in `mind-vm/platform`, where this library
+> lives as `agentloop/`. This repository is read-only and its history is preserved
+> there.
+>
+> Everything released here — up to and including **v0.4.1** — stays MIT and
+> remains forkable; that is not retracted. New versions come from the platform
+> module, which is private (platform ADR-0001).
+
 # agentloop
 
 A small Go engine for LLM agents that think by writing JavaScript instead of
