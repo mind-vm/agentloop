@@ -316,3 +316,36 @@ func TestUnknownPromptType(t *testing.T) {
 		t.Error("want an error for an unrecognised prompt type")
 	}
 }
+
+// The whole path a terminal answer takes: typed numbers and free text,
+// through ask()'s check, into the script as labels.
+func TestQuestionsInTheTerminal(t *testing.T) {
+	p, out := prompterFor(t, approvalPrompt, "2\n1, 3\nBenelux\n", nil)
+	s := sandbox.New(sandbox.InputPack(p.questions()))
+	_, ret, err := s.ExecuteTurn(`
+var r = ask({type: "questions", message: "Report setup", questions: [
+  {id: "period", header: "Period", question: "Which quarter?", options: [{label: "Q1", description: "Jan–Mar"}, {label: "Q2"}]},
+  {id: "regions", question: "Which regions?", multiSelect: true, options: ["North", "South", "West"]},
+  {id: "extra", question: "Anything else?", allowOther: true, options: ["No", "Yes"]}]});
+state.r = r;`, nil)
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	if want := `"r":{"extra":"Benelux","period":"Q2","regions":["North","West"]}`; !strings.Contains(string(ret), want) {
+		t.Errorf("state = %s, want %s", ret, want)
+	}
+	for _, want := range []string{"(1/3) Period — Which quarter?", "1) Q1 — Jan–Mar", "Choose one or more", "or type your own answer"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("terminal lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestQuestionsInTheTerminalRejectsAnOutOfRangeNumber(t *testing.T) {
+	p, _ := prompterFor(t, approvalPrompt, "7\n", nil)
+	s := sandbox.New(sandbox.InputPack(p.questions()))
+	_, _, err := s.ExecuteTurn(`ask({type: "questions", questions: [{id: "a", question: "?", options: ["x", "y"]}]})`, nil)
+	if err == nil || !strings.Contains(err.Error(), "7 is not one of the 2 options") {
+		t.Fatalf("got %v", err)
+	}
+}

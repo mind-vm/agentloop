@@ -1,0 +1,25 @@
+id,date,customer,region,product,quantity,total,status
+1001,2026-01-08,Acme GmbH,North,Sensors,40,1240.50,paid
+1002,2026-01-15,Bauer & Söhne,South,Cables,120,380.00,paid
+1003,2026-01-22,Café Zentral,North,Displays,2,92.10,paid
+1004,2026-02-03,Delta AG,West,Controllers,15,2210.00,overdue
+1005,2026-02-11,Elbe Logistik,North,Sensors,20,640.00,paid
+1006,2026-02-19,Fischer KG,South,Displays,25,1500.00,paid
+1007,2026-02-27,Gruber,West,Cables,30,75.25,overdue
+1008,2026-03-04,Acme GmbH,North,Controllers,10,1480.00,paid
+1009,2026-03-12,Hansa Werke,East,Sensors,60,1910.40,open
+1010,2026-03-18,Ilse Maier,East,Cables,45,142.80,paid
+1011,2026-03-25,Bauer & Söhne,South,Sensors,35,1085.00,open
+1012,2026-04-02,Jansen BV,West,Displays,8,520.00,paid
+1013,2026-04-09,Delta AG,West,Sensors,50,1590.00,overdue
+1014,2026-04-16,Kraft & Co,East,Controllers,12,1764.00,paid
+1015,2026-04-23,Elbe Logistik,North,Cables,200,610.00,paid
+1016,2026-05-05,Fischer KG,South,Controllers,9,1305.00,open
+1017,2026-05-13,Lindner,East,Displays,14,910.00,paid
+1018,2026-05-21,Acme GmbH,North,Sensors,70,2205.00,paid
+1019,2026-05-28,Mohr GmbH,West,Cables,90,288.00,open
+1020,2026-06-04,Hansa Werke,East,Displays,20,1300.00,paid
+1021,2026-06-11,Gruber,West,Sensors,15,472.50,overdue
+1022,2026-06-18,Nord Energie,North,Controllers,22,3190.00,paid
+1023,2026-06-25,Bauer & Söhne,South,Displays,6,390.00,paid
+1024,2026-06-30,Kraft & Co,East,Sensors,40,1264.00,open

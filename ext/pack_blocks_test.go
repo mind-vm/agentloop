@@ -128,3 +128,51 @@ func TestBlocksGuidanceReplacesTheDefault(t *testing.T) {
 		t.Error("declarations lost with custom guidance")
 	}
 }
+
+func TestBlocksCarryAnID(t *testing.T) {
+	s, blocks := blocksSandbox(t)
+	_, _, err := s.ExecuteTurn(`
+emitMarkdown("first", {id: "note"});
+emitTable({id: "t", columns: ["a"], rows: [{a: 1}]});
+`, nil)
+	if err != nil {
+		t.Fatalf("script: %v", err)
+	}
+	if (*blocks)[0].Payload["id"] != "note" || (*blocks)[1].Payload["id"] != "t" {
+		t.Errorf("ids not carried: %s / %s", payloadJSON(t, (*blocks)[0]), payloadJSON(t, (*blocks)[1]))
+	}
+	if _, _, err := s.ExecuteTurn(`emitTable({id: 7, columns: ["a"], rows: [{a: 1}]})`, nil); err == nil || !strings.Contains(err.Error(), "id must be a non-empty string") {
+		t.Errorf("numeric id accepted: %v", err)
+	}
+}
+
+// A table past the cap is cut and says so; its first rows are still true.
+func TestBlocksTruncateLongTables(t *testing.T) {
+	s := sandbox.New(ext.BlocksPack(ext.BlocksOptions{MaxTableRows: 3}))
+	var got sandbox.Event
+	s.SetOnEvent(func(e sandbox.Event) {
+		if e.Kind == sandbox.EventBlock {
+			got = e
+		}
+	})
+	_, _, err := s.ExecuteTurn(`var rows = []; for (var i = 0; i < 10; i++) rows.push({n: i}); emitTable({columns: ["n"], rows: rows});`, nil)
+	if err != nil {
+		t.Fatalf("script: %v", err)
+	}
+	j := payloadJSON(t, got)
+	if !strings.Contains(j, `"rows":[{"n":0},{"n":1},{"n":2}]`) || !strings.Contains(j, `"truncated":true`) || !strings.Contains(j, `"totalRows":10`) {
+		t.Errorf("table not cut and marked: %s", j)
+	}
+}
+
+// A chart past the cap is refused: cut, it would be a different chart.
+func TestBlocksRefuseOversizedCharts(t *testing.T) {
+	s := sandbox.New(ext.BlocksPack(ext.BlocksOptions{MaxChartPoints: 5}))
+	_, _, err := s.ExecuteTurn(`var d = []; for (var i = 0; i < 6; i++) d.push({x: i, y: i}); emitChart({variant: "line", data: d, x: "x", series: ["y"]});`, nil)
+	if err == nil || !strings.Contains(err.Error(), "aggregate first") {
+		t.Fatalf("oversized chart not refused: %v", err)
+	}
+	if p := ext.BlocksPack(ext.BlocksOptions{MaxChartPoints: 5}).Prompt; !strings.Contains(p, "At most 5 rows") {
+		t.Errorf("prompt does not state the cap:\n%s", p)
+	}
+}

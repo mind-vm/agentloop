@@ -20,6 +20,34 @@ type BlocksOptions struct {
 	// pack, a domain core) says so here, because "never invent a number"
 	// lands harder when the prompt names where the real ones live.
 	Guidance string
+
+	// MaxTableRows caps the rows one table carries. Zero uses 500. A
+	// block bypasses the model's context on its way to the client — that
+	// is the point — so nothing else stops a script from streaming fifty
+	// thousand rows into a browser. Past the cap the table is cut, not
+	// refused: its first rows are still true, and the payload says so
+	// with truncated and totalRows.
+	MaxTableRows int
+
+	// MaxChartPoints caps the rows one chart plots. Zero uses 1000. Past
+	// it the chart is refused rather than cut, because a chart drawn from
+	// the first thousand rows is a different chart; the error asks for
+	// aggregation, which is what an unreadable chart needed anyway.
+	MaxChartPoints int
+}
+
+func (o BlocksOptions) maxTableRows() int {
+	if o.MaxTableRows <= 0 {
+		return 500
+	}
+	return o.MaxTableRows
+}
+
+func (o BlocksOptions) maxChartPoints() int {
+	if o.MaxChartPoints <= 0 {
+		return 1000
+	}
+	return o.MaxChartPoints
 }
 
 const defaultBlocksGuidance = `// Present results as blocks the UI renders, then finish with a short text summary.
@@ -48,27 +76,35 @@ const defaultBlocksGuidance = `// Present results as blocks the UI renders, then
 // the exception: those are converted, since the intent is unambiguous.
 //
 // Blocks do not end the run. A script can emit several, across turns, and
-// the user watches them arrive while the agent is still working.
+// the user watches them arrive while the agent is still working. A block
+// given an id replaces the earlier block with that id instead of adding
+// one, so a follow-up that revises a chart does not leave two of it on the
+// page, and a table can grow in place as a long job finds rows. The id is
+// only carried; replacing is the client's half of the contract.
 func BlocksPack(opts BlocksOptions) sandbox.Pack {
 	guidance := opts.Guidance
 	if guidance == "" {
 		guidance = defaultBlocksGuidance
 	}
+	prompt := strings.NewReplacer("{{rows}}", strconv.Itoa(opts.maxTableRows()), "{{points}}", strconv.Itoa(opts.maxChartPoints()))
 	return sandbox.Pack{
 		Name:        "blocks",
 		Description: "Show results as render blocks — emitTable, emitChart, emitStats, emitMarkdown",
-		Prompt: "// --- Render blocks (rich output for the UI) ---\n" + guidance + `
-declare function emitMarkdown(markdown: string): void;
-/** rows are objects keyed by the column names. */
-declare function emitTable(spec: { title?: string; columns: string[]; rows: Record<string, any>[] }): void;
+		Prompt: prompt.Replace("// --- Render blocks (rich output for the UI) ---\n" + guidance + `
+// Every block takes an optional id: emitting again with the same id REPLACES that block
+// (revise a chart, grow a table in place) instead of adding another. Reuse ids in follow-ups.
+declare function emitMarkdown(markdown: string, opts?: { id?: string }): void;
+/** rows are objects keyed by the column names. Tables over ` + "{{rows}}" + ` rows are cut and marked truncated. */
+declare function emitTable(spec: { id?: string; title?: string; columns: string[]; rows: Record<string, any>[] }): void;
 /** A chart over rows. Common variants: bar (compare across categories),
  * line/area (trend over time), donut/pie (parts of a whole, single series).
  * x = category / x-axis column; series = value column(s); both must be keys of the rows.
+ * At most ` + "{{points}}" + ` rows — aggregate (by month, by category) before charting more.
  * For the rarer variants and the size/types fields, call help('charts') first. */
-declare function emitChart(spec: { title?: string; variant: "bar" | "line" | "area" | "composite" | "donut" | "pie" | "radialBar" | "funnel" | "radar" | "scatter" | "bubble" | "sparkline" | "heatmap"; data: Record<string, any>[]; x: string; series: string[]; size?: string; types?: Record<string, "bar" | "line" | "area"> }): void;
+declare function emitChart(spec: { id?: string; title?: string; variant: "bar" | "line" | "area" | "composite" | "donut" | "pie" | "radialBar" | "funnel" | "radar" | "scatter" | "bubble" | "sparkline" | "heatmap"; data: Record<string, any>[]; x: string; series: string[]; size?: string; types?: Record<string, "bar" | "line" | "area"> }): void;
 /** Headline figures (KPIs) in a grid. value is the formatted string to show; unit an optional
  * suffix ("%", "EUR"); delta an optional change as a fraction (0.12 => +12%) driving an up/down badge. */
-declare function emitStats(spec: { title?: string; cols?: number; items: { label: string; value: string; unit?: string; delta?: number; hint?: string }[] }): void;`,
+declare function emitStats(spec: { id?: string; title?: string; cols?: number; items: { label: string; value: string; unit?: string; delta?: number; hint?: string }[] }): void;`),
 		HelpEntries: map[string]string{
 			"emitMarkdown": "emitMarkdown(md) — show a short markdown block.",
 			"emitTable":    "emitTable({columns, rows, title?}) — show a table; rows are objects keyed by the column names.",
@@ -89,6 +125,9 @@ declare function emitStats(spec: { title?: string; cols?: number; items: { label
 				_ = rt.Set(name, func(call goja.FunctionCall) goja.Value {
 					spec, err := blockSpec(call.Argument(0))
 					if err == nil {
+						err = checkID(spec)
+					}
+					if err == nil {
 						spec, err = check(spec)
 					}
 					if err != nil {
@@ -105,11 +144,24 @@ declare function emitStats(spec: { title?: string; cols?: number; items: { label
 				if goja.IsUndefined(md) || goja.IsNull(md) || strings.TrimSpace(md.String()) == "" {
 					panic(rt.NewGoError(fmt.Errorf("emitMarkdown: pass the markdown text as a string — nothing was shown")))
 				}
-				sb.Emit(sandbox.Event{Kind: sandbox.EventBlock, Summary: "markdown", Payload: map[string]any{"markdown": md.String()}})
+				payload := map[string]any{"markdown": md.String()}
+				if o, ok := call.Argument(1).Export().(map[string]any); ok {
+					if err := checkID(o); err != nil {
+						panic(rt.NewGoError(fmt.Errorf("emitMarkdown: %w — nothing was shown", err)))
+					}
+					if id, ok := o["id"]; ok {
+						payload["id"] = id
+					}
+				}
+				sb.Emit(sandbox.Event{Kind: sandbox.EventBlock, Summary: "markdown", Payload: payload})
 				return goja.Undefined()
 			})
-			register("emitTable", "table", checkTable)
-			register("emitChart", "chart", checkChart)
+			register("emitTable", "table", func(spec map[string]any) (map[string]any, error) {
+				return checkTable(spec, opts.maxTableRows())
+			})
+			register("emitChart", "chart", func(spec map[string]any) (map[string]any, error) {
+				return checkChart(spec, opts.maxChartPoints())
+			})
 			register("emitStats", "stats", checkStats)
 		},
 	}
@@ -126,7 +178,21 @@ func blockSpec(v goja.Value) (map[string]any, error) {
 	return m, nil
 }
 
-func checkTable(spec map[string]any) (map[string]any, error) {
+// checkID accepts a missing id or a non-empty string. A number would work
+// as a key in a JS client and fail as one in a typed one; the contract
+// says string, so the pack does.
+func checkID(spec map[string]any) error {
+	v, ok := spec["id"]
+	if !ok {
+		return nil
+	}
+	if s, ok := v.(string); !ok || s == "" {
+		return fmt.Errorf("id must be a non-empty string")
+	}
+	return nil
+}
+
+func checkTable(spec map[string]any, maxRows int) (map[string]any, error) {
 	columns, ok := stringList(spec["columns"])
 	if !ok || len(columns) == 0 {
 		return nil, fmt.Errorf("columns must be a non-empty array of column names")
@@ -143,13 +209,25 @@ func checkTable(spec map[string]any) (map[string]any, error) {
 			}
 		}
 	}
+	if len(rows) > maxRows {
+		cut := make([]any, maxRows)
+		for i := range cut {
+			cut[i] = rows[i]
+		}
+		spec["rows"] = cut
+		spec["truncated"] = true
+		spec["totalRows"] = len(rows)
+	}
 	return spec, nil
 }
 
-func checkChart(spec map[string]any) (map[string]any, error) {
+func checkChart(spec map[string]any, maxPoints int) (map[string]any, error) {
 	data, ok := objectList(spec["data"])
 	if !ok || len(data) == 0 {
 		return nil, fmt.Errorf("data must be a non-empty array of row objects")
+	}
+	if len(data) > maxPoints {
+		return nil, fmt.Errorf("data has %d rows, more than the %d a chart can show legibly; aggregate first (by month, by category) or show a table", len(data), maxPoints)
 	}
 	series, ok := stringList(spec["series"])
 	if !ok || len(series) == 0 {

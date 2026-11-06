@@ -535,7 +535,12 @@ Three things will catch you:
   is a conservative default (deny side effects, block private-network
   fetches); `sandbox.AllowAll` is the explicit fail-open escape hatch.
 - **Human in the loop** — `sandbox.InputPack(requester)` gives the agent
-  `ask()`: a confirm, choice or text question the script blocks on. It is
+  `ask()`: a confirm, choice or text question the script blocks on, or
+  `type: "questions"` — one to four multiple-choice questions (options
+  with descriptions, multi-select, an optional free-text answer) the user
+  steps through and answers in one reply. That reply is checked against
+  the options offered before the script sees it, whatever transport
+  carried it. It is
   not in `DefaultCapabilities`, because nothing generic knows whether
   there is a human or how to reach one — wrap it in a `Capability` that
   closes over your transport, as `cmd/agentloop` does over the terminal.
@@ -558,6 +563,8 @@ Three things will catch you:
   The shapes are the ones process-mining's Mantine console renders.
   `Guidance` replaces the opening instruction, so an application can name
   where its numbers come from.
+  `examples/blocks` is a runnable demo: the pack behind an `agentrun`
+  SSE endpoint and a Mantine page that draws each block as it arrives.
 - **Generate a skill from an OpenAPI spec** — `ext.OpenAPIPack(spec, cfg)`
   turns an OpenAPI 3 document into a `require()`-able skill: one JS
   function per operation, named after its `operationId` (or derived from

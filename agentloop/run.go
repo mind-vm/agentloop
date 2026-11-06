@@ -351,6 +351,14 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 	if err != nil {
 		return RunResult{}, fmt.Errorf("agentloop: load session: %w", err)
 	}
+	// A store may answer an unknown id with a zero Session, as the
+	// SessionStore contract allows and agentloopmem does. The run is that
+	// session regardless, and BuildContext.SessionID is read from here:
+	// left empty, a capability keyed on the session — a per-session
+	// InputRequester — could not be built on any fresh session's first turn.
+	if sess.ID == "" {
+		sess.ID = req.SessionID
+	}
 
 	priorSteps, err := l.cfg.Steps.LastN(ctx, req.SessionID, l.cfg.HistoryWindow)
 	if err != nil {
