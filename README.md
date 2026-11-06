@@ -61,8 +61,10 @@ is kept verbatim) and large data never appears in the context window twice.
   `writeFile`, `editFile`, `listDir`, `glob`, `grep` — confined to one
   directory by `os.Root`, so `..` and symlinks cannot escape it),
   `ExecPack` (`exec` — argv only, allowlisted environment, capped
-  output, and a timeout that reclaims the whole process group), and
-  `OpenAPIPack`, which generates a
+  output, and a timeout that reclaims the whole process group),
+  `BlocksPack` (`emitMarkdown`, `emitTable`, `emitChart`, `emitStats` —
+  render blocks a client draws, checked so a chart cannot name a column
+  no row has), and `OpenAPIPack`, which generates a
   `require()`-able skill — one JS function per operation — from an
   OpenAPI 3 document. Each takes a callback, small interface, or (for
   `OpenAPIPack`) a parsed spec, same decoupling the core packs use, so
@@ -548,6 +550,14 @@ Three things will catch you:
   the slice passed to `DefaultSandboxBuilder`. `sendEmail` and `secret`
   are already in `DefaultPolicy`'s side-effect list, so they're denied
   until granted via `DefaultPolicy.AllowTools`.
+- **Show results as render blocks** — `ext.BlocksPack(ext.BlocksOptions{})`
+  lets a script emit markdown, tables, charts and KPI panels while it
+  works. Each is a `sandbox.EventBlock` whose `Summary` is the block type
+  and whose `Payload` is the spec; `agentrun` delivers it as a
+  `sandbox_event` with `args.kind == "block"`, and the client draws it.
+  The shapes are the ones process-mining's Mantine console renders.
+  `Guidance` replaces the opening instruction, so an application can name
+  where its numbers come from.
 - **Generate a skill from an OpenAPI spec** — `ext.OpenAPIPack(spec, cfg)`
   turns an OpenAPI 3 document into a `require()`-able skill: one JS
   function per operation, named after its `operationId` (or derived from

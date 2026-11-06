@@ -3,10 +3,10 @@
 //
 // sandbox's built-in packs (require, http, fetch, markdown, ai, help,
 // skills) are the minimal set every agentloop deployment needs. The
-// packs here — email, secret, document search, a document store — are
-// common but optional: most of the applications this was extracted
-// from use two or three of them, never all four, and a new deployment
-// starts with none.
+// packs here — email, secret, document search, a document store, render
+// blocks — are common but optional: most of the applications this was
+// extracted from use two or three of them, never all of them, and a new
+// deployment starts with none.
 //
 // Each pack follows the same decoupling the core packs use: it takes a
 // callback or a small interface (EmailPack's send func, SecretPack's
