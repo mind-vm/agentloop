@@ -608,9 +608,21 @@ func wrapIIFE(code string) string {
 // the IIFE returns its value. Statements that can't be returned
 // (var/let/const, control flow, function/class declarations) pass
 // through.
+//
+// Only a line that begins at the top level is a candidate. One that
+// begins inside a bracket, string, template literal or block comment
+// opened on an earlier line is the tail of a longer statement, and
+// prefixing it injects `return` into the middle of that statement:
+// `f(1,\n2)` would become `f(1,\nreturn 2)`, and a line of a multi-line
+// template would silently change the text the callee receives. In that
+// case the code is left alone and the value is lost, never the program.
 func autoReturn(code string) string {
 	lines := strings.Split(code, "\n")
+	topLevel := topLevelLineStarts(code)
 	for i := len(lines) - 1; i >= 0; i-- {
+		if !topLevel[i] {
+			break
+		}
 		trimmed := strings.TrimSpace(lines[i])
 		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
 			continue
@@ -622,6 +634,108 @@ func autoReturn(code string) string {
 		break
 	}
 	return strings.Join(lines, "\n")
+}
+
+// topLevelLineStarts reports, for each line of code as strings.Split
+// would cut it, whether the line begins at bracket depth zero and
+// outside any string, template literal or block comment.
+//
+// It is a scanner, not a parser, and errs towards false. Regular
+// expression literals are not recognised (telling `/` from division
+// needs the grammar), so a bracket or quote inside one can skew what
+// follows; the caller then declines to auto-return, or isStatement
+// still vets the line. `${...}` inside a template is scanned as code,
+// so a template nested in a substitution is tracked correctly.
+func topLevelLineStarts(code string) []bool {
+	const (
+		inCode = iota
+		inSingle
+		inDouble
+		inTemplate
+		inLineComment
+		inBlockComment
+	)
+	starts := []bool{true}
+	state, depth := inCode, 0
+	// The bracket depth at which each open `${` began, innermost last:
+	// the `}` that brings depth back there resumes the template.
+	var subst []int
+
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+		if c == '\n' {
+			switch state {
+			case inLineComment:
+				state = inCode
+			case inSingle, inDouble:
+				// A plain quote cannot span lines; a backslash before
+				// the newline (a continuation) skipped it below.
+				state = inCode
+			}
+			starts = append(starts, state == inCode && depth == 0 && len(subst) == 0)
+			continue
+		}
+		switch state {
+		case inSingle, inDouble, inTemplate:
+			quote := byte('`')
+			switch state {
+			case inSingle:
+				quote = '\''
+			case inDouble:
+				quote = '"'
+			}
+			switch {
+			case c == '\\' && i+1 < len(code):
+				i++
+				if code[i] == '\n' {
+					// Continuation: still inside the literal.
+					starts = append(starts, false)
+				}
+			case c == quote:
+				state = inCode
+			case state == inTemplate && c == '$' && i+1 < len(code) && code[i+1] == '{':
+				i++
+				subst = append(subst, depth)
+				state = inCode
+			}
+		case inLineComment:
+		case inBlockComment:
+			if c == '*' && i+1 < len(code) && code[i+1] == '/' {
+				i++
+				state = inCode
+			}
+		case inCode:
+			switch c {
+			case '\'':
+				state = inSingle
+			case '"':
+				state = inDouble
+			case '`':
+				state = inTemplate
+			case '/':
+				if i+1 < len(code) && code[i+1] == '/' {
+					state = inLineComment
+				} else if i+1 < len(code) && code[i+1] == '*' {
+					i++
+					state = inBlockComment
+				}
+			case '(', '[', '{':
+				depth++
+			case '}':
+				if n := len(subst); n > 0 && depth == subst[n-1] {
+					subst = subst[:n-1]
+					state = inTemplate
+				} else if depth > 0 {
+					depth--
+				}
+			case ')', ']':
+				if depth > 0 {
+					depth--
+				}
+			}
+		}
+	}
+	return starts
 }
 
 // isStatement reports whether the trimmed line is a statement that
