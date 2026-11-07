@@ -758,4 +758,4 @@ record is where it says what would make it wrong.
 
 ## License
 
-Proprietary — see [LICENSE](../LICENSE). All rights reserved.
+MIT — see [LICENSE](LICENSE) and [ADR-0016](docs/adr/0016-mit-and-public.md).
