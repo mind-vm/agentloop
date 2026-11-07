@@ -99,8 +99,7 @@ declare function emitTable(spec: { id?: string; title?: string; columns: string[
 /** A chart over rows. Common variants: bar (compare across categories),
  * line/area (trend over time), donut/pie (parts of a whole, single series).
  * x = category / x-axis column; series = value column(s); both must be keys of the rows.
- * At most ` + "{{points}}" + ` rows — aggregate (by month, by category) before charting more.
- * For the rarer variants and the size/types fields, call help('charts') first. */
+ * At most ` + "{{points}}" + ` rows — aggregate (by month, by category) before charting more. */
 declare function emitChart(spec: { id?: string; title?: string; variant: "bar" | "line" | "area" | "composite" | "donut" | "pie" | "radialBar" | "funnel" | "radar" | "scatter" | "bubble" | "sparkline" | "heatmap"; data: Record<string, any>[]; x: string; series: string[]; size?: string; types?: Record<string, "bar" | "line" | "area"> }): void;
 /** Headline figures (KPIs) in a grid. value is the formatted string to show; unit an optional
  * suffix ("%", "EUR"); delta an optional change as a fraction (0.12 => +12%) driving an up/down badge. */
@@ -108,17 +107,9 @@ declare function emitStats(spec: { id?: string; title?: string; cols?: number; i
 		HelpEntries: map[string]string{
 			"emitMarkdown": "emitMarkdown(md) — show a short markdown block.",
 			"emitTable":    "emitTable({columns, rows, title?}) — show a table; rows are objects keyed by the column names.",
-			"emitChart":    "emitChart({variant, data, x, series, title?}) — show a chart over rows. Common variants: bar/line/area/donut/pie. See help('charts') for the rest.",
+			"emitChart":    "emitChart({variant, data, x, series, title?}) — show a chart over rows. Common variants: bar/line/area/donut/pie; help('charts') has the rest.",
 			"emitStats":    "emitStats({items, title?, cols?}) — show a grid of headline figures (KPIs).",
-			"charts": `charts — emitChart variants beyond bar/line/area/donut/pie. All take data (rows), x and series like the common ones, plus the noted extra fields:
-  composite — mix bar/line/area in one chart. x=category column, series=value columns; types maps a series name to "bar"|"line"|"area" (unmapped series default to bar).
-  radar     — one spoke per x value, compare series across them. x=axis-label column, series=value columns.
-  scatter   — points on numeric x/y. x=numeric x column, series=[y column].
-  bubble    — scatter with sized points. x=x column, series=[y column], size=value column for the point radius.
-  radialBar — circular bars, one per category. x=label column, series=[value column].
-  funnel    — stage drop-off. x=stage-label column, series=[value column]; pass rows already ordered by descending value.
-  sparkline — tiny inline trend, no axes/labels. series=[value column] (x is ignored).
-  heatmap   — calendar heatmap. x=date column (YYYY-MM-DD strings), series=[value column].`,
+			"charts":       chartsHelp(),
 		},
 		Register: func(rt *goja.Runtime, sb *sandbox.Sandbox) {
 			register := func(name, blockType string, check func(map[string]any) (map[string]any, error)) {
@@ -221,7 +212,46 @@ func checkTable(spec map[string]any, maxRows int) (map[string]any, error) {
 	return spec, nil
 }
 
+// rareCharts is how each less common variant reads its fields. The prompt
+// does not carry it: pointing the model at help('charts') meant declaring
+// help(), and that one declaration sent gemini-3.5-flash-lite back to
+// answering in its first script — 9 of 12 runs, against 0 of 12 without
+// it, reproduced twice. A model that reaches for one of these and gets a
+// field wrong learns the shape from the error instead, the one place it is
+// sure to read it.
+var rareCharts = []struct{ variant, usage string }{
+	{"composite", `mix bar/line/area in one chart. x=category column, series=value columns; types maps a series name to "bar"|"line"|"area" (unmapped series default to bar).`},
+	{"radar", "one spoke per x value, compare series across them. x=axis-label column, series=value columns."},
+	{"scatter", "points on numeric x/y. x=numeric x column, series=[y column]."},
+	{"bubble", "scatter with sized points. x=x column, series=[y column], size=value column for the point radius."},
+	{"radialBar", "circular bars, one per category. x=label column, series=[value column]."},
+	{"funnel", "stage drop-off. x=stage-label column, series=[value column]; pass rows already ordered by descending value."},
+	{"sparkline", "tiny inline trend, no axes/labels. series=[value column] (x is ignored)."},
+	{"heatmap", "calendar heatmap. x=date column (YYYY-MM-DD strings), series=[value column]."},
+}
+
+func chartsHelp() string {
+	var b strings.Builder
+	b.WriteString("charts — emitChart variants beyond bar/line/area/donut/pie. All take data (rows), x and series like the common ones, plus the noted extra fields:")
+	for _, c := range rareCharts {
+		fmt.Fprintf(&b, "\n  %-9s — %s", c.variant, c.usage)
+	}
+	return b.String()
+}
+
 func checkChart(spec map[string]any, maxPoints int) (map[string]any, error) {
+	out, err := checkChartFields(spec, maxPoints)
+	if err != nil {
+		for _, c := range rareCharts {
+			if spec["variant"] == c.variant {
+				return nil, fmt.Errorf("%w (%s: %s)", err, c.variant, c.usage)
+			}
+		}
+	}
+	return out, err
+}
+
+func checkChartFields(spec map[string]any, maxPoints int) (map[string]any, error) {
 	data, ok := objectList(spec["data"])
 	if !ok || len(data) == 0 {
 		return nil, fmt.Errorf("data must be a non-empty array of row objects")
@@ -247,6 +277,11 @@ func checkChart(spec map[string]any, maxPoints int) (map[string]any, error) {
 	for _, s := range series {
 		if !have[s] {
 			return nil, fmt.Errorf("series %q is a key of no row, so the chart would draw empty; the rows have %s", s, listKeys(have))
+		}
+	}
+	if spec["variant"] == "bubble" {
+		if size, _ := spec["size"].(string); !have[size] {
+			return nil, fmt.Errorf("size %q is a key of no row, so every bubble would draw the same; the rows have %s", size, listKeys(have))
 		}
 	}
 	return spec, nil
