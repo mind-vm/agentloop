@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -331,8 +333,16 @@ state.r = r;`, nil)
 	if err != nil {
 		t.Fatalf("script: %v\n%s", err, out)
 	}
-	if want := `"r":{"extra":"Benelux","period":"Q2","regions":["North","West"]}`; !strings.Contains(string(ret), want) {
-		t.Errorf("state = %s, want %s", ret, want)
+	// Compared decoded: the answer object reaches JS from a Go map, so its
+	// key order — which JSON.stringify keeps — is not fixed.
+	var st struct {
+		R map[string]any `json:"r"`
+	}
+	if err := json.Unmarshal(ret, &st); err != nil {
+		t.Fatalf("state %s: %v", ret, err)
+	}
+	if got := fmt.Sprint(st.R); got != "map[extra:Benelux period:Q2 regions:[North West]]" {
+		t.Errorf("state = %s", ret)
 	}
 	for _, want := range []string{"(1/3) Period — Which quarter?", "1) Q1 — Jan–Mar", "Choose one or more", "or type your own answer"} {
 		if !strings.Contains(out.String(), want) {

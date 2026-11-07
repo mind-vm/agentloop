@@ -63,6 +63,10 @@ type Sandbox struct {
 	// not in this set — see resetGlobals(). Stray state on globalThis
 	// from one Execute should not survive into the next.
 	baseKeys map[string]struct{}
+	// stringify is the runtime's own JSON.stringify, taken before any
+	// script runs: a script that reassigns JSON must not change how its
+	// state is saved.
+	stringify goja.Callable
 }
 
 // New creates a fresh Sandbox with core primitives and the given Packs.
@@ -83,6 +87,7 @@ func New(packs ...Pack) *Sandbox {
 
 	// Core primitives — always present.
 	s.registerCorePrimitives()
+	s.stringify, _ = goja.AssertFunction(rt.Get("JSON").ToObject(rt).Get("stringify"))
 
 	// Register packs.
 	for _, p := range packs {
@@ -479,9 +484,38 @@ func (s *Sandbox) ExecuteTurn(code string, stateJSON json.RawMessage) (logs stri
 	}
 
 	logs = s.joinedLogs()
-	ret = exportJSON(s.runtime.Get("state"))
+	ret, err = s.saveState()
+	if err != nil {
+		s.runtime.ClearInterrupt()
+		s.Emit(Event{Kind: EventError, Summary: "script error", Detail: err.Error()})
+		return logs, nil, err
+	}
 	s.Emit(Event{Kind: EventScriptResult, Summary: "result", Result: logs})
 	return logs, ret, nil
+}
+
+// saveState serialises state with the runtime's JSON.stringify, so it
+// keeps exactly what a script's author expects "saved as JSON" to keep:
+// NaN and Infinity become null, functions and undefined drop out, a Date
+// becomes its ISO string, toJSON is honoured. Go's encoder refused the
+// first three outright, and the refusal surfaced as no state at all — one
+// NaN from Number("n/a") emptied state for every later script, silently.
+//
+// What JSON.stringify throws on (a cycle, a BigInt) is the script's error,
+// as it would be in any JS program; the caller keeps the previous state.
+func (s *Sandbox) saveState() (json.RawMessage, error) {
+	val := s.runtime.Get("state")
+	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) || s.stringify == nil {
+		return nil, nil
+	}
+	out, err := s.stringify(goja.Undefined(), val)
+	if err != nil {
+		return nil, fmt.Errorf("state could not be saved: %s", strings.TrimPrefix(err.Error(), "TypeError: "))
+	}
+	if goja.IsUndefined(out) || out.String() == "null" {
+		return nil, nil
+	}
+	return json.RawMessage(out.String()), nil
 }
 
 // DefaultMaxLogBytes caps one turn's log() output when
@@ -535,19 +569,6 @@ func truncateLogs(out string, max int) string {
 	return out[:h] +
 		fmt.Sprintf("\n... (%d bytes of log output omitted — log selectively, or return data instead) ...\n", t-h) +
 		out[t:]
-}
-
-// exportJSON marshals a returned Goja value to JSON, or nil for
-// undefined/null/unmarshalable values (e.g. a function).
-func exportJSON(val goja.Value) json.RawMessage {
-	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
-		return nil
-	}
-	b, err := json.Marshal(val.Export())
-	if err != nil || len(b) == 0 || string(b) == "null" {
-		return nil
-	}
-	return b
 }
 
 // formatValue converts a Goja value to the string the LLM sees back
