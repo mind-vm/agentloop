@@ -1,0 +1,16 @@
+.turn-message { max-width: 80%; white-space: pre-wrap; }
+
+/* A pending question is what the run waits on; a spinner beside it reads
+   as "the agent is busy", which is the opposite of the truth. !important
+   because the spinner row is a .d-flex, and Tabler's utilities are. */
+.turn:has(form[data-ask]) .working { display: none !important; }
+
+/* The free-text answer only once "Other…" is picked: an empty box under
+   every question reads as a field the reader has to fill. */
+fieldset:not(:has([data-other]:checked)) .ask-other { display: none; }
+
+.step > summary { cursor: pointer; list-style: none; }
+.step > summary::-webkit-details-marker { display: none; }
+.step pre { white-space: pre-wrap; font-size: 12px; max-height: 24rem; overflow: auto; }
+
+.markdown > :last-child, .prose > :last-child { margin-bottom: 0; }

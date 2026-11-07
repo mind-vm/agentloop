@@ -61,8 +61,10 @@ is kept verbatim) and large data never appears in the context window twice.
   `writeFile`, `editFile`, `listDir`, `glob`, `grep` — confined to one
   directory by `os.Root`, so `..` and symlinks cannot escape it),
   `ExecPack` (`exec` — argv only, allowlisted environment, capped
-  output, and a timeout that reclaims the whole process group), and
-  `OpenAPIPack`, which generates a
+  output, and a timeout that reclaims the whole process group),
+  `BlocksPack` (`emitMarkdown`, `emitTable`, `emitChart`, `emitStats` —
+  render blocks a client draws, checked so a chart cannot name a column
+  no row has), and `OpenAPIPack`, which generates a
   `require()`-able skill — one JS function per operation — from an
   OpenAPI 3 document. Each takes a callback, small interface, or (for
   `OpenAPIPack`) a parsed spec, same decoupling the core packs use, so
@@ -533,7 +535,12 @@ Three things will catch you:
   is a conservative default (deny side effects, block private-network
   fetches); `sandbox.AllowAll` is the explicit fail-open escape hatch.
 - **Human in the loop** — `sandbox.InputPack(requester)` gives the agent
-  `ask()`: a confirm, choice or text question the script blocks on. It is
+  `ask()`: a confirm, choice or text question the script blocks on, or
+  `type: "questions"` — one to four multiple-choice questions (options
+  with descriptions, multi-select, an optional free-text answer) the user
+  steps through and answers in one reply. That reply is checked against
+  the options offered before the script sees it, whatever transport
+  carried it. It is
   not in `DefaultCapabilities`, because nothing generic knows whether
   there is a human or how to reach one — wrap it in a `Capability` that
   closes over your transport, as `cmd/agentloop` does over the terminal.
@@ -548,6 +555,22 @@ Three things will catch you:
   the slice passed to `DefaultSandboxBuilder`. `sendEmail` and `secret`
   are already in `DefaultPolicy`'s side-effect list, so they're denied
   until granted via `DefaultPolicy.AllowTools`.
+- **Show results as render blocks** — `ext.BlocksPack(ext.BlocksOptions{})`
+  lets a script emit markdown, tables, charts and KPI panels while it
+  works. Each is a `sandbox.EventBlock` whose `Summary` is the block type
+  and whose `Payload` is the spec; `agentrun` delivers it as a
+  `sandbox_event` with `args.kind == "block"`, and the client draws it.
+  The shapes are the ones process-mining's Mantine console renders.
+  `Guidance` replaces the opening instruction, so an application can name
+  where its numbers come from.
+  `examples/blocks` is a runnable demo: the pack behind an `agentrun`
+  SSE endpoint and a Mantine page that draws each block as it arrives.
+  `examples/blocks-tabler` draws the same blocks on the server instead:
+  each one is rendered to a Tabler HTML fragment with
+  [tabler-templ](https://github.com/mind-vm/tabler-templ) and streamed,
+  so the page needs no Node and no build. It is its own Go module
+  (`cd examples/blocks-tabler && go run .`), which keeps templ out of the
+  core's dependencies.
 - **Generate a skill from an OpenAPI spec** — `ext.OpenAPIPack(spec, cfg)`
   turns an OpenAPI 3 document into a `require()`-able skill: one JS
   function per operation, named after its `operationId` (or derived from

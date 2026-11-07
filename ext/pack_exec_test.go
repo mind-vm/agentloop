@@ -59,7 +59,9 @@ func TestNonZeroExitIsAResultNotAnError(t *testing.T) {
 
 	got := run(t, sb, `const r = exec(["sh", "-c", "echo out; echo err >&2; exit 3"]);
 	return { code: r.code, out: r.stdout.trim(), err: r.stderr.trim(), timedOut: r.timedOut };`)
-	if got != `{"code":3,"err":"err","out":"out","timedOut":false}` {
+	// State is saved by JSON.stringify, so the keys keep the order the
+	// script wrote them in.
+	if got != `{"code":3,"out":"out","err":"err","timedOut":false}` {
 		t.Errorf("got %s", got)
 	}
 }

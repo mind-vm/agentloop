@@ -22,21 +22,34 @@ import (
 // " at <fn> (<eval>:…)" or " at <eval>:l:c(pc)".
 var stackFrame = regexp.MustCompile(` at (\S+ \((native|<eval>[^)]*)\)|<eval>:\d+)`)
 
-func sanitizeErrorForModel(raw string) string {
-	msg := raw
+// frameLine is a line that is nothing but a goja frame, as
+// Exception.String() writes them ("\tat f (<eval>:2:17(2))"). It must match
+// the whole line: a message line such as "  at least one row is required"
+// is content, and dropping it is the same bug as cutting at the newline.
+var frameLine = regexp.MustCompile(`^\s*at (native|<eval>:\d+:\d+(\(\d+\))?|\S+ \((native|<eval>.*)\))\s*$`)
 
-	// goja puts the message on the first line and stack frames after it; drop them.
-	if i := strings.IndexByte(msg, '\n'); i >= 0 {
-		msg = msg[:i]
+func sanitizeErrorForModel(raw string) string {
+	// A message may span lines — a pack listing every problem it found, one
+	// per line. goja's Error() keeps those lines and appends only the first
+	// frame inline on the last one; Exception.String() adds one frame per
+	// line after them. Cutting at the first newline (as this once did) kept
+	// the heading "Fix and call ui() again:" and threw away the list it
+	// introduced, so drop frame lines and inline frames, never message lines.
+	var kept []string
+	for _, line := range strings.Split(raw, "\n") {
+		if frameLine.MatchString(line) {
+			continue
+		}
+		// Cut where the first inline frame begins — not at the first " at ",
+		// which a message may hold itself ("does not stand at the top of …"):
+		// cutting there hid the half of a refusal that says what is allowed
+		// instead.
+		if loc := stackFrame.FindStringIndex(line); loc != nil {
+			line = line[:loc[0]]
+		}
+		kept = append(kept, strings.TrimRight(line, " \t"))
 	}
-	// When newlines were flattened, frames trail inline as " at <sym> (native)"
-	// or " at <fn> (<eval>:…)" / " at <eval>:l:c(pc)". Cut where the first
-	// frame begins — not at the first " at ", which a message may hold
-	// itself ("does not stand at the top of …"): cutting there hid the half
-	// of a refusal that says what is allowed instead.
-	if loc := stackFrame.FindStringIndex(msg); loc != nil {
-		msg = msg[:loc[0]]
-	}
+	msg := strings.Join(kept, "\n")
 
 	msg = strings.TrimSpace(msg)
 	msg = strings.TrimPrefix(msg, "sandbox: ")

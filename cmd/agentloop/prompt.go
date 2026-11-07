@@ -160,9 +160,85 @@ func (q questioner) Request(req sandbox.InputRequestData) (any, error) {
 		return q.p.choice(req)
 	case "text":
 		return q.p.text(req)
+	case "questions":
+		return q.p.askQuestions(req)
 	default:
 		return nil, fmt.Errorf("unsupported prompt type %q", req.InputType)
 	}
+}
+
+// askQuestions walks the steps one after another, the way a terminal can.
+// It returns labels, not numbers, because labels are what ask() checks the
+// reply against — and what the script branches on.
+func (p *terminalPrompter) askQuestions(req sandbox.InputRequestData) (any, error) {
+	if req.Message != "" {
+		fmt.Fprintf(p.out, "\n%s\n", req.Message)
+	}
+	out := make(map[string]any, len(req.Questions))
+	for i, q := range req.Questions {
+		head := fmt.Sprintf("(%d/%d)", i+1, len(req.Questions))
+		if q.Header != "" {
+			head += " " + q.Header
+		}
+		fmt.Fprintf(p.out, "\n%s — %s\n", head, q.Question)
+		for j, o := range q.Options {
+			fmt.Fprintf(p.out, "  %d) %s", j+1, o.Label)
+			if o.Description != "" {
+				fmt.Fprintf(p.out, " — %s", o.Description)
+			}
+			fmt.Fprintln(p.out)
+		}
+		hint := "Choose [1]"
+		if q.MultiSelect {
+			hint = "Choose one or more, e.g. 1,3 [1]"
+		}
+		if q.AllowOther {
+			hint += ", or type your own answer"
+		}
+		fmt.Fprint(p.out, hint+" ")
+		line, err := p.readLine()
+		if err != nil {
+			return nil, err
+		}
+		picked, err := pickOptions(q, strings.TrimSpace(line))
+		if err != nil {
+			return nil, err
+		}
+		if q.MultiSelect {
+			out[q.ID] = picked
+		} else {
+			out[q.ID] = picked[0]
+		}
+	}
+	return out, nil
+}
+
+// pickOptions reads "2" or "1,3" as option numbers. Anything else is the
+// user's own answer when the question allows one; ask() decides whether it
+// stands, so this does not second-guess it.
+func pickOptions(q sandbox.Question, line string) ([]string, error) {
+	if line == "" {
+		return []string{q.Options[0].Label}, nil
+	}
+	parts := []string{line}
+	if q.MultiSelect {
+		parts = strings.Split(line, ",")
+	}
+	var picked []string
+	for _, part := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil {
+			if q.AllowOther {
+				return []string{line}, nil
+			}
+			return nil, fmt.Errorf("%q is not one of the %d options offered", line, len(q.Options))
+		}
+		if n < 1 || n > len(q.Options) {
+			return nil, fmt.Errorf("%d is not one of the %d options offered", n, len(q.Options))
+		}
+		picked = append(picked, q.Options[n-1].Label)
+	}
+	return picked, nil
 }
 
 func (p *terminalPrompter) choice(req sandbox.InputRequestData) (any, error) {

@@ -116,6 +116,10 @@ func (b *Broker) request(sessionID uuid.UUID, req sandbox.InputRequestData) (any
 			"inputType":   req.InputType,
 			"options":     req.Options,
 			"placeholder": req.Placeholder,
+			// Questions carries its own json tags; a nil slice for the
+			// other input types marshals as null, which a client reads as
+			// "not a questions prompt".
+			"questions": req.Questions,
 		},
 	})
 

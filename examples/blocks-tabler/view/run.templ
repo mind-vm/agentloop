@@ -1,0 +1,258 @@
+package view
+
+import (
+	"strconv"
+
+	"github.com/mind-vm/tabler-templ/alert"
+	"github.com/mind-vm/tabler-templ/assets"
+	"github.com/mind-vm/tabler-templ/badge"
+	"github.com/mind-vm/tabler-templ/button"
+	"github.com/mind-vm/tabler-templ/card"
+	"github.com/mind-vm/tabler-templ/chart"
+	"github.com/mind-vm/tabler-templ/form"
+	"github.com/mind-vm/tabler-templ/icon"
+	"github.com/mind-vm/tabler-templ/spinner"
+)
+
+// Page is the whole page: an empty conversation, the composer, and the
+// script that reads the stream. Everything after it arrives as fragments.
+templ Page(examples []string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Blocks · Tabler</title>
+			@assets.Head(assets.Props{Charts: true})
+			@icon.Styles()
+			<link rel="stylesheet" href="/static/app.css"/>
+		</head>
+		<body>
+			<div class="page">
+				<header class="navbar navbar-expand-md d-print-none">
+					<div class="container-xl">
+						<div class="navbar-brand gap-2">
+							<span>thinking-core</span>
+							@badge.Badge(badge.Props{Color: "blue", Light: true}) {
+								blocks · tabler-templ
+							}
+						</div>
+						<div class="text-secondary small ms-auto d-none d-md-block">
+							The agent writes JavaScript; ext.BlocksPack turns its results into these blocks, rendered on the server.
+						</div>
+					</div>
+				</header>
+				<div class="page-wrapper">
+					<div class="page-body">
+						<div class="container-narrow">
+							<div id="turns" class="d-flex flex-column gap-4">
+								@card.Card(card.Props{ID: "intro"}) {
+									@card.Body() {
+										<h3 class="card-title mb-1">Ask about the sales data</h3>
+										<p class="text-secondary">The agent can read <code>orders.csv</code> (24 orders, January–June 2026) and nothing else.</p>
+										<div class="d-flex flex-column gap-2">
+											for _, ex := range examples {
+												@button.Button(button.Props{Type: "button", Outline: true, Variant: button.VariantPrimary, Class: "text-start justify-content-start", Attributes: templ.Attributes{"data-example": ex}}) {
+													{ ex }
+												}
+											}
+										</div>
+									}
+								}
+							</div>
+							<form id="composer" class="mt-4 d-flex gap-2 align-items-end">
+								<textarea name="message" class="form-control" rows="2" placeholder="Ask something about orders.csv…"></textarea>
+								@button.Button(button.Props{Variant: button.VariantPrimary, Icon: "ti-send"}) {
+									Send
+								}
+							</form>
+						</div>
+					</div>
+				</div>
+			</div>
+			@assets.Scripts()
+			// The page itself draws no chart, so nothing else would render the
+			// script that starts the ones streamed in later.
+			@chart.Script()
+			<script src="/static/app.js" defer></script>
+		</body>
+	</html>
+}
+
+// Turn is the frame one message's run fills in, slot by slot.
+templ Turn(message string) {
+	<div class="turn d-flex flex-column gap-3">
+		<div class="align-self-end bg-primary-lt rounded-3 px-3 py-2 turn-message">{ message }</div>
+		<div data-slot="steps" class="d-flex flex-column gap-1"></div>
+		<div data-slot="asks" class="d-flex flex-column gap-3"></div>
+		<div data-slot="blocks" class="d-flex flex-column gap-3"></div>
+		<div data-slot="answer"></div>
+		<div data-slot="status">
+			<div class="working text-secondary d-flex align-items-center gap-2">
+				@spinner.Spinner(spinner.Props{Small: true})
+				<span>working</span>
+			</div>
+		</div>
+	</div>
+}
+
+// Step is one script the agent ran. It is drawn twice — once when the code
+// is sent, again with the result — under the same id, so the page swaps it.
+templ Step(id string, n int, code string, result *string) {
+	<details class="card card-sm step" id={ id }>
+		<summary class="card-body d-flex align-items-center gap-2 py-2">
+			<span>Script { strconv.Itoa(n) }</span>
+			if result == nil {
+				@spinner.Spinner(spinner.Props{Small: true})
+			} else if failed(*result) {
+				@badge.Badge(badge.Props{Color: "orange", Light: true}) {
+					error → retried
+				}
+			} else {
+				@badge.Badge(badge.Props{Color: "green", Light: true}) {
+					ran
+				}
+			}
+		</summary>
+		<div class="card-body pt-0">
+			<pre class="mb-2"><code>{ code }</code></pre>
+			if result != nil && *result != "" {
+				<pre class={ "mb-0", templ.KV("bg-orange-lt", failed(*result)) }>{ *result }</pre>
+			}
+		</div>
+	</details>
+}
+
+func failed(result string) bool {
+	return len(result) >= 5 && result[:5] == "Error"
+}
+
+// Answer is the agent's closing text, as markdown.
+templ Answer(text string) {
+	<div class="markdown">
+		@templ.Raw(markdownHTML(text))
+	</div>
+}
+
+templ Failure(msg string) {
+	@alert.Alert(alert.Props{Variant: alert.VariantDanger, Title: "The run failed"}) {
+		{ msg }
+	}
+}
+
+templ Footer(steps int, prompt, completion int32, blocks int) {
+	<div class="text-secondary small">
+		{ strconv.Itoa(steps) } steps · { strconv.Itoa(int(prompt)) }+{ strconv.Itoa(int(completion)) } tokens · { strconv.Itoa(blocks) } blocks
+	</div>
+}
+
+// Ask is a pending ask() as a form. The page collects the answer from it by
+// the data attributes and posts it as JSON; ask() re-checks it against the
+// questions either way, so the form only has to be convenient, not right.
+templ Ask(r AskRequest) {
+	@card.Card(card.Props{ID: "ask-" + r.RequestID, Status: "primary", Class: "ask"}) {
+		<form class="card-body" data-ask={ r.RequestID } data-input-type={ r.InputType }>
+			<div class="mb-2">
+				@badge.Badge(badge.Props{Color: "blue", Light: true, Icon: "ti-message-question"}) {
+					The agent is asking
+				}
+			</div>
+			if r.Message != "" {
+				<p class="fw-bold">{ r.Message }</p>
+			}
+			switch r.InputType {
+				case "questions":
+					for _, q := range r.Questions {
+						@question(q)
+					}
+					<div class="ask-error text-danger small mb-2"></div>
+					<div class="d-flex justify-content-end">
+						@button.Button(button.Props{Variant: button.VariantPrimary}) {
+							Send answers
+						}
+					</div>
+				case "confirm":
+					<div class="d-flex gap-2">
+						@button.Button(button.Props{Variant: button.VariantPrimary, Attributes: templ.Attributes{"name": "value", "value": "true"}}) {
+							Yes
+						}
+						@button.Button(button.Props{Attributes: templ.Attributes{"name": "value", "value": "false"}}) {
+							No
+						}
+					</div>
+				case "choice":
+					<div class="d-flex flex-wrap gap-2">
+						for _, o := range r.Options {
+							@button.Button(button.Props{Outline: true, Variant: button.VariantPrimary, Attributes: templ.Attributes{"name": "value", "value": o}}) {
+								{ o }
+							}
+						}
+					</div>
+				default:
+					<div class="d-flex gap-2">
+						<input type="text" name="text" class="form-control" placeholder={ r.Placeholder } required/>
+						@button.Button(button.Props{Variant: button.VariantPrimary}) {
+							Send
+						}
+					</div>
+			}
+		</form>
+	}
+}
+
+templ question(q AskQuestion) {
+	<fieldset class="mb-3" data-question={ q.ID } data-label={ q.Question } data-multi={ strconv.FormatBool(q.MultiSelect) }>
+		<legend class="form-label">
+			if q.Header != "" {
+				<span class="badge bg-secondary-lt me-1">{ q.Header }</span>
+			}
+			{ q.Question }
+			if q.MultiSelect {
+				<span class="text-secondary small"> (choose several)</span>
+			}
+		</legend>
+		@form.SelectGroup(form.SelectGroupProps{Boxes: true, Class: "d-flex flex-column"}) {
+			for _, o := range q.Options {
+				@form.SelectItem(form.SelectItemProps{Name: "q-" + q.ID, Value: o.Label, Radio: !q.MultiSelect, Box: true, Title: o.Label, Description: o.Description})
+			}
+			if q.AllowOther {
+				// "Other…" is marked by an attribute, not a sentinel value: any
+				// string could also be a label the model wrote.
+				@form.SelectItem(form.SelectItemProps{Name: "q-" + q.ID, Radio: !q.MultiSelect, Box: true, Title: "Other…", Description: "Type your own answer", Attributes: templ.Attributes{"data-other": "true"}})
+			}
+		}
+		if q.AllowOther {
+			<input type="text" class="form-control mt-2 ask-other" name={ "other-" + q.ID } placeholder="Your answer"/>
+		}
+	</fieldset>
+}
+
+// Answered replaces the form once the reply is through.
+templ Answered(r AskRequest, value any) {
+	<div class="card card-sm bg-secondary-lt" id={ "ask-" + r.RequestID }>
+		<div class="card-body">
+			<div class="text-secondary small">You answered</div>
+			if r.InputType == "questions" {
+				{{ answers, _ := value.(map[string]any) }}
+				for i, q := range r.Questions {
+					if i > 0 {
+						<span class="text-secondary">{ " · " }</span>
+					}
+					<span class="text-secondary">{ firstNonEmpty(q.Header, q.ID) }:</span>
+					<span class="fw-medium">{ joinAnswer(answers[q.ID]) }</span>
+				}
+			} else {
+				<span class="fw-medium">{ joinAnswer(value) }</span>
+			}
+		</div>
+	</div>
+}
+
+func firstNonEmpty(s ...string) string {
+	for _, v := range s {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
