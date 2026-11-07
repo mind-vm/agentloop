@@ -46,7 +46,6 @@ var static embed.FS
 // guidance is examples/blocks' word for word: the comparison between the two
 // renderers is only fair if the agent is told the same thing.
 const guidance = `// Present results as blocks the UI renders, then finish with answer() and a short text summary.
-// answer() ENDS your turn: never call it in a script that is still reading or exploring — only after the blocks are out.
 // The data is in the workspace (listDir(), readFile()). Every number in a block must come from it —
 // never invent one. Parse CSV in a script, keep the rows in state, and build blocks from state.
 // When the request leaves real choices open (period, regions, which view), ask them all at once with

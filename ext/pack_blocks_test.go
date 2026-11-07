@@ -176,3 +176,21 @@ func TestBlocksRefuseOversizedCharts(t *testing.T) {
 		t.Errorf("prompt does not state the cap:\n%s", p)
 	}
 }
+
+// The prompt names no help(): declaring it cost the demo most of its runs
+// on a small model (see rareCharts). What the rarer variants need arrives
+// in the error instead, so a wrong first try is one turn, not a guess.
+func TestBlocksRareVariantErrorsCarryTheirShape(t *testing.T) {
+	if p := ext.BlocksPack(ext.BlocksOptions{}).Prompt; strings.Contains(p, "help(") {
+		t.Errorf("the blocks prompt points at help(), which the prompt does not declare:\n%s", p)
+	}
+	s, _ := blocksSandbox(t)
+	_, _, err := s.ExecuteTurn(`emitChart({variant: "bubble", data: [{a: 1, b: 2, c: 3}], x: "a", series: ["b"]})`, nil)
+	if err == nil || !strings.Contains(err.Error(), "size") || !strings.Contains(err.Error(), "point radius") {
+		t.Errorf("a bubble without size should say what size is, got %v", err)
+	}
+	_, _, err = s.ExecuteTurn(`emitChart({variant: "bar", data: [{a: 1}], x: "z", series: ["a"]})`, nil)
+	if err == nil || strings.Contains(err.Error(), "(bar:") {
+		t.Errorf("a common variant's error should stay as it was, got %v", err)
+	}
+}

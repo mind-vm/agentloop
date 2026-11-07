@@ -753,6 +753,11 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 				resultContent += "\n\nNOTICE: exit() was called with nothing printed, so the task is still open. print(...) the result for the user, or pass it as exit(\"message\")."
 			}
 		}
+		answerText, answered := sb.TakeAnswer()
+		if answered && execErr == nil && strings.TrimSpace(logs) != "" {
+			answered = false
+			resultContent += unreadAnswerNotice
+		}
 		if l.cfg.BudgetNotice && l.cfg.MaxIterations-iter-1 == 2 {
 			resultContent += "\n\nNOTICE: two replies are left before this task is cut off. If the work is done or nearly done, finish now (" +
 				finishInstruction(l.cfg) + "), saying what is finished and what is not."
@@ -798,7 +803,8 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 		// value as the final response — the in-script equivalent of the
 		// DONE marker. Checked after the data snapshot so `data` is
 		// persisted before the run returns.
-		if final, ok := sb.TakeAnswer(); ok {
+		if answered {
+			final := answerText
 			writeStep(RunStep{
 				StepType:         "response",
 				Content:          final,
@@ -849,6 +855,22 @@ func (l *loop) Run(ctx context.Context, req RunRequest) (result RunResult, err e
 	l.emit(req.OnEvent, RunEvent{Type: "error", Content: errMsg})
 	return finalize("max_iterations"), fmt.Errorf("agentloop: %s", errMsg)
 }
+
+// unreadAnswerNotice follows the log of a script that also called
+// answer(): the answer is held, and the model reads what it logged before
+// it finishes. The run ends on an answer() from a script that logs nothing.
+//
+// A small model reads answer() as a report on the step it just took:
+// gemini-3.5-flash-lite listed the workspace and answered "Listed the
+// files" in up to 12 of 12 runs of a dashboard request, and, when only
+// that first answer was held, answered "Read the first lines of
+// orders.csv" from the next script instead. No wording of the prompt
+// fixed it reliably — one unrelated sentence in a pack's docs moved the
+// same request between 0 and 12 of 12. Holding the answer does not
+// depend on wording. What it costs a model that meant to finish is one
+// turn, and only when it logged in the same script: a log the model never
+// reads is one it did not need.
+const unreadAnswerNotice = "\n\nNOTICE: answer() was held, so the task is still open: this script also logged the output above, which you had not read yet. Carry on from it; to finish, call answer(result) in a script that logs nothing."
 
 // respond persists+emits a final response step and finalizes the run —
 // the two direct-answer exits (a DONE marker, or a reply with no code
