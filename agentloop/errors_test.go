@@ -1,9 +1,40 @@
 package agentloop
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/dop251/goja"
+
+	"github.com/mind-vm/thinking-core/sandbox"
 )
+
+// TestSanitizeErrorForModel_RealGojaThrow runs the shape a pack actually
+// produces rather than a hand-written string: the table above encodes what
+// goja was believed to emit, and that belief is what kept a pack's list of
+// problems from ever reaching the model.
+func TestSanitizeErrorForModel_RealGojaThrow(t *testing.T) {
+	msg := "ui: 2 problems. Fix and call ui() again:\n  - line 1: unknown component Foo\n  - line 3: missing prop"
+	sb := sandbox.New(sandbox.Pack{Name: "probe", Register: func(rt *goja.Runtime, _ *sandbox.Sandbox) {
+		_ = rt.Set("ui", func(goja.FunctionCall) goja.Value { panic(rt.NewGoError(errors.New(msg))) })
+	}})
+	for _, code := range []string{"ui()", "function f() { ui() }\nf()"} {
+		_, _, err := sb.ExecuteTurn(code, nil)
+		if err == nil {
+			t.Fatalf("%q: expected an error", code)
+		}
+		if got := sanitizeErrorForModel(err.Error()); got != msg {
+			t.Errorf("%q via Error():\n got %q\nwant %q", code, got, msg)
+		}
+		var ex *goja.Exception
+		if errors.As(err, &ex) {
+			if got := sanitizeErrorForModel(ex.String()); got != msg {
+				t.Errorf("%q via String():\n got %q\nwant %q", code, got, msg)
+			}
+		}
+	}
+}
 
 func TestSanitizeErrorForModel(t *testing.T) {
 	tests := []struct {
@@ -27,7 +58,7 @@ func TestSanitizeErrorForModel(t *testing.T) {
 			want: "ReferenceError: foo is not defined",
 		},
 		{
-			name: "drops everything after the first newline",
+			name: "drops frame lines after a one-line message",
 			in:   "TypeError: Cannot read property 'x' of undefined\n    at <eval>:2:5(2)\n    at native",
 			want: "TypeError: Cannot read property 'x' of undefined",
 		},
@@ -45,6 +76,21 @@ func TestSanitizeErrorForModel(t *testing.T) {
 			name: "an <eval> frame after a message holding ' at '",
 			in:   "Error: look at it first at <eval>:3:1(4)",
 			want: "Error: look at it first",
+		},
+		{
+			name: "keeps a multi-line message, dropping the inline frame on its last line",
+			in:   "GoError: ui: 2 problems. Fix and call ui() again:\n  - line 1: unknown component Foo\n  - line 3: missing prop at root at github.com/x/ext.(*pack).ui-fm (native)",
+			want: "ui: 2 problems. Fix and call ui() again:\n  - line 1: unknown component Foo\n  - line 3: missing prop at root",
+		},
+		{
+			name: "keeps a multi-line message, dropping Exception.String() frame lines",
+			in:   "GoError: ui: 1 problem:\n  - bad\n\tat github.com/x/ext.(*pack).ui-fm (native)\n\tat f (<eval>:2:17(2))\n\tat <eval>:4:2(7)\n",
+			want: "ui: 1 problem:\n  - bad",
+		},
+		{
+			name: "a message line that begins with 'at' is content, not a frame",
+			in:   "Error: rows rejected:\n  at least one row is required at <eval>:2:7(3)",
+			want: "Error: rows rejected:\n  at least one row is required",
 		},
 		{
 			name: "a real ' at ' with no frame marker is left as content",
