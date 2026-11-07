@@ -565,6 +565,12 @@ Three things will catch you:
   where its numbers come from.
   `examples/blocks` is a runnable demo: the pack behind an `agentrun`
   SSE endpoint and a Mantine page that draws each block as it arrives.
+  `examples/blocks-tabler` draws the same blocks on the server instead:
+  each one is rendered to a Tabler HTML fragment with
+  [tabler-templ](https://github.com/mind-vm/tabler-templ) and streamed,
+  so the page needs no Node and no build. It is its own Go module
+  (`cd examples/blocks-tabler && go run .`), which keeps templ out of the
+  core's dependencies.
 - **Generate a skill from an OpenAPI spec** — `ext.OpenAPIPack(spec, cfg)`
   turns an OpenAPI 3 document into a `require()`-able skill: one JS
   function per operation, named after its `operationId` (or derived from

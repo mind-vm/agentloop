@@ -1,0 +1,161 @@
+package view
+
+import (
+	"strconv"
+
+	"github.com/mind-vm/tabler-templ/badge"
+	"github.com/mind-vm/tabler-templ/blocks/metric"
+	"github.com/mind-vm/tabler-templ/card"
+	"github.com/mind-vm/tabler-templ/chart"
+	"github.com/mind-vm/tabler-templ/prose"
+	"github.com/mind-vm/tabler-templ/table"
+	"github.com/mind-vm/tabler-templ/trending"
+)
+
+// BlockView is one block in its slot. The wrapper carries the DOM id the
+// page replaces by, so every block type is replaceable the same way.
+templ BlockView(b Block) {
+	<div class="block" id={ b.DOMID } data-block={ b.Type }>
+		if b.Revised {
+			@badge.Badge(badge.Props{Color: "purple", Light: true, Class: "mb-1", Icon: "ti-refresh"}) {
+				revised
+			}
+		}
+		switch b.Type {
+			case "markdown":
+				@markdownBlock(b.Payload)
+			case "table":
+				@tableBlock(b.Payload)
+			case "chart":
+				@chartBlock(b)
+			case "stats":
+				@statsBlock(b.Payload)
+			default:
+				@unknownBlock(b)
+		}
+	</div>
+}
+
+templ framed(title string) {
+	@card.Card() {
+		if title != "" {
+			@card.Header() {
+				@card.Title() {
+					{ title }
+				}
+			}
+		}
+		{ children... }
+	}
+}
+
+// Markdown is drawn as markdown here, unlike the Mantine page: goldmark is
+// already a dependency of the core and drops raw HTML, so the injection
+// surface that kept the other renderer to plain text is not there.
+templ markdownBlock(p map[string]any) {
+	@prose.HTML(markdownHTML(str(p, "markdown")))
+}
+
+templ tableBlock(p map[string]any) {
+	{{
+		cols := strs(p, "columns")
+		rs := rows(p, "rows")
+		num := map[string]bool{}
+		for _, c := range cols {
+			num[c] = numeric(rs, c)
+		}
+	}}
+	@framed(str(p, "title")) {
+		@table.Table(table.Props{Card: true, VCenter: true, Striped: true, Hover: true, Responsive: true}) {
+			<thead>
+				<tr>
+					for _, c := range cols {
+						<th class={ templ.KV("text-end", num[c]) }>{ c }</th>
+					}
+				</tr>
+			</thead>
+			<tbody>
+				if len(rs) == 0 {
+					@table.Empty(max(1, len(cols)), "No rows.")
+				}
+				for _, r := range rs {
+					<tr>
+						for _, c := range cols {
+							// Numbers right-aligned, as in every ledger: a column of
+							// amounts is read by comparing digits that line up.
+							<td class={ templ.KV("text-end font-monospace", num[c]) }>{ cellText(r[c]) }</td>
+						}
+					</tr>
+				}
+			</tbody>
+		}
+		if p["truncated"] == true {
+			@card.Footer() {
+				<span class="text-secondary small">Showing { strconv.Itoa(len(rs)) } of { cell(p["totalRows"]) } rows.</span>
+			}
+		}
+	}
+}
+
+templ chartBlock(b Block) {
+	@framed(str(b.Payload, "title")) {
+		@card.Body() {
+			@chart.Chart(chartProps(b.ChartID, b.Payload))
+		}
+	}
+}
+
+templ statsBlock(p map[string]any) {
+	{{
+		items := rows(p, "items")
+		cols := len(items)
+		if n, ok := p["cols"].(float64); ok && n >= 1 {
+			cols = int(n)
+		}
+		cols = min(max(cols, 1), 4)
+	}}
+	<div>
+		if t := str(p, "title"); t != "" {
+			<h3 class="mb-2">{ t }</h3>
+		}
+		<div class="row row-cards">
+			for _, it := range items {
+				<div class={ "col-sm-6", "col-lg-" + strconv.Itoa(12/cols) }>
+					@metric.Card(metric.Props{
+						Label: str(it, "label"),
+						Value: valueWithUnit(it),
+						Trend: trend(it),
+						Note:  str(it, "hint"),
+					})
+				</div>
+			}
+		</div>
+	</div>
+}
+
+func valueWithUnit(it map[string]any) string {
+	if u := str(it, "unit"); u != "" {
+		return str(it, "value") + " " + u
+	}
+	return str(it, "value")
+}
+
+// trend turns the pack's delta, a fraction, into tabler-templ's percent.
+func trend(it map[string]any) *trending.Props {
+	d, ok := it["delta"].(float64)
+	if !ok {
+		return nil
+	}
+	pct := d * 100
+	return &trending.Props{Value: pct, Text: strconv.FormatFloat(pct, 'f', 0, 64)}
+}
+
+// A block nobody here knows is shown as its JSON rather than dropped — a
+// dropped block is a number the agent computed and the reader never saw.
+templ unknownBlock(b Block) {
+	@framed("Unrecognised block: " + b.Type) {
+		@card.Body() {
+			<pre class="mb-0">{ pretty(b.Payload) }</pre>
+		}
+	}
+}

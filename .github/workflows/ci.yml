@@ -81,3 +81,30 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build ./...
+
+  # examples/blocks-tabler is a module of its own — templ and tabler-templ
+  # stay out of the core's go.mod — so `go test ./...` at the root never
+  # reaches it. It replaces the core with ../.., which makes it the one place
+  # a change to the blocks contract shows up as a broken renderer.
+  blocks-tabler:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/blocks-tabler
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: examples/blocks-tabler/go.mod
+          cache: true
+          cache-dependency-path: examples/blocks-tabler/go.sum
+      # The generated _templ.go files are committed so `go run .` needs no
+      # tool; this fails when a .templ file was edited without regenerating.
+      - name: Generated templ code is current
+        run: |
+          go tool templ generate
+          git diff --exit-code -- .
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -race ./...
